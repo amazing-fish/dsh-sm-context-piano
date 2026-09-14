@@ -40,6 +40,15 @@ check('pins the current DSH baseline and orders the public client owners', () =>
   assert.equal(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'), false)
 })
 
+check('every injected client dependency exports an actual browser face', () => {
+  for (const name of manifest.dsh.client.inject) {
+    const dependency = requireHere(`${name}/package.json`)
+    assert.ok(dependency.exports?.['./client'], `${name} must export ./client`)
+  }
+  assert.equal(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-slots'), false)
+  assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-renderer'))
+})
+
 const host = await import('../lib/index.js')
 check('host registers one live settings namespace', () => {
   let registration
