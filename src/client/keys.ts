@@ -1,6 +1,6 @@
 /** User-message and visible-assistant-output projection for the navigator. */
 
-import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 
 export interface KeyDescriptor {
@@ -45,6 +45,17 @@ interface NodeData {
   turn?: number
 }
 
+function dataOf(node: ChatConversationViewNode): NodeData {
+  return typeof node.data === 'object' && node.data !== null ? node.data as NodeData : {}
+}
+
+/** Prefer the official location identity; never infer a Turn from array position. */
+function turnOf(node: ChatConversationViewNode): number | null {
+  const location = node.location as { turn?: unknown } | undefined
+  const turn = location?.turn ?? dataOf(node).turn
+  return typeof turn === 'number' && Number.isSafeInteger(turn) && turn >= 0 ? turn : null
+}
+
 interface OutputRuns {
   runs: string[]
   startsWithText: boolean
@@ -84,14 +95,13 @@ function descriptor(
   suffix = '',
 ): KeyDescriptor {
   const preview = truncate(text, PREVIEW_LIMIT)
-  const data = node.data as NodeData
   return {
     key: `${node.key}${suffix}`,
     anchorKey: node.key,
     role,
     title: titleOf(preview),
     preview,
-    turn: typeof data.turn === 'number' ? data.turn : null,
+    turn: turnOf(node),
   }
 }
 
@@ -104,7 +114,11 @@ export function buildNavigationNodes(nodes: readonly ChatConversationViewNode[])
   let continuableAssistant: KeyDescriptor | null = null
 
   for (const node of nodes) {
-    const data = node.data as NodeData
+    if (node.visibility === 'hidden') {
+      continuableAssistant = null
+      continue
+    }
+    const data = dataOf(node)
     if (USER_KINDS.has(node.kind)) {
       continuableAssistant = null
       const text = Array.isArray(data.content) ? contentText(data.content).trim() : ''
@@ -125,10 +139,12 @@ export function buildNavigationNodes(nodes: readonly ChatConversationViewNode[])
 
     for (let index = 0; index < output.runs.length; index += 1) {
       const text = output.runs[index]
+      const turn = turnOf(node)
       const mergeTarget = index === 0
         && output.startsWithText
         && continuableAssistant !== null
-        && (continuableAssistant.turn === null || data.turn === undefined || continuableAssistant.turn === data.turn)
+        && turn !== null
+        && continuableAssistant.turn === turn
         ? continuableAssistant
         : null
       if (mergeTarget !== null) {

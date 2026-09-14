@@ -25,15 +25,19 @@ check('host core packages are peer-only', () => {
     assert.ok(manifest.peerDependencies?.[name])
     assert.ok(manifest.devDependencies?.[name])
   }
-  assert.match(manifest.peerDependencies['@deepseek-ai/dsh-settings'], /\^0\.0\.1-rc\.1/)
-  assert.match(manifest.peerDependencies['@deepseek-ai/dsh-settings'], /\^0\.1\.1-rc\.1/)
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-settings'], '^0.1.5-rc.2')
 })
 
-check('settings peer declares alpha.1 compatibility', () => {
-  assert.match(
-    manifest.peerDependencies['@deepseek-ai/dsh-settings'],
-    /\^0\.1\.2-alpha\.1/,
-  )
+check('pins the current DSH baseline and orders the public client owners', () => {
+  for (const [name, version] of Object.entries(manifest.devDependencies)) {
+    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.1.5-rc.2', name)
+  }
+  for (const name of ['@deepseek-ai/dsh-api-session-controller', '@deepseek-ai/dsh-client-ui-chat']) {
+    assert.ok(manifest.dsh.client.inject.includes(name))
+    assert.equal(manifest.devDependencies[name], '0.1.5-rc.2')
+  }
+  assert.equal(manifest.devDependencies['@deepseek-ai/dsh-client-runtime'], undefined)
+  assert.equal(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'), false)
 })
 
 const host = await import('../lib/index.js')
@@ -78,7 +82,7 @@ const exports = globalThis.__handoff.factory(spec => {
 })
 
 check('client exposes the DSH plugin contract', () => {
-  assert.deepEqual(exports.inject, ['sessions', 'locale', 'slots', 'settingsScope', 'connection', 'remote'])
+  assert.deepEqual(exports.inject, ['sessions', 'uiConversation', 'locale', 'slots', 'settingsScope', 'remote'])
   assert.equal(typeof exports.apply, 'function')
 })
 

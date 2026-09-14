@@ -2,7 +2,7 @@ import { useCallback, useState, useSyncExternalStore } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
 import type {
   SettingsScope,
-} from '@deepseek-ai/dsh-client-runtime/client'
+} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {
   InjectFace,
   PropsRuntime,
