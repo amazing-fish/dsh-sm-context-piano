@@ -34,17 +34,9 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: '10.17.1'
-      # Resolve the proposed exact DSH baseline so build/test evidence is
-      # available even while the dependency lockfile migration is pending.
-      - name: Install proposed dependency baseline
-        run: pnpm install --no-frozen-lockfile
+      - name: Install the committed dependency baseline
+        run: pnpm install --frozen-lockfile
       - name: Build, typecheck and run all regression tests
         run: pnpm verify
-      - name: Retain generated lockfile for inspection
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: resolved-lockfile-${{ matrix.os }}
-          path: pnpm-lock.yaml
-      - name: Require the committed lockfile to match the manifest
+      - name: Ensure verification does not rewrite the dependency lock
         run: git diff --exit-code -- pnpm-lock.yaml
