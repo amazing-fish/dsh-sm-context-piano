@@ -20,6 +20,11 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   let turns: readonly NavigationTurn[] = []
   let rows = new Map<string, HTMLElement>()
   let issuedUnloaded = false
+  const readerPointer = (event: Event): void => {
+    const target = event.target as HTMLElement | null
+    if (target?.closest('input,textarea,select,[contenteditable="true"]') != null) return
+    api.cancel()
+  }
   const refreshRows = (): void => {
     rows = new Map()
     for (const row of flow.querySelectorAll<HTMLElement>('[data-chat-anchor-key]')) {
@@ -27,6 +32,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     }
   }
   const release = (): void => {
+    scrollport?.removeEventListener('pointerdown', readerPointer)
     if (saved === undefined) return
     const old = saved
     saved = undefined
@@ -53,15 +59,18 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     for (const [turn, button] of buttons) if (button.getAttribute('aria-busy') === 'true') return turn
     return null
   }
-  return {
+  const api = {
     rowFor, release, busy,
     /** One row scan per publication, never one scan per mark. */
     reconcile(next: readonly NavigationTurn[]): boolean {
       refreshRows()
       turns = next
-      const candidates = [...local?.querySelectorAll<HTMLElement>('nav[aria-label]') ?? []]
-        .filter(element => element.getAttribute('aria-label') === labels.navigation())
-      const candidate = candidates.length === 1 ? candidates[0] : null
+      // Do not mistake an unmatched/ambiguous native landmark for the genuine
+      // absence that the official single-Turn renderer normally produces.
+      const surfaces = [...local?.querySelectorAll<HTMLElement>('nav,[role="navigation"]') ?? []]
+        .filter(element => !flow.contains(element))
+      const candidates = surfaces.filter(element => element.getAttribute('aria-label') === labels.navigation())
+      const candidate = surfaces.length === 1 && candidates.length === 1 ? candidates[0] : null
       const nextButtons = new Map<number, HTMLButtonElement>()
       if (candidate !== null) {
         const all = [...candidate.querySelectorAll<HTMLButtonElement>('button')]
@@ -77,7 +86,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
           nextButtons.set(turn.turn, matches[0])
         }
         if (all.length !== turns.length) { release(); nav = null; buttons.clear(); return false }
-      } else if (turns.length > 1 || turns.some(turn => turn.anchor.kind === 'unloaded')) {
+      } else if (surfaces.length !== 0 || turns.length > 1 || turns.some(turn => turn.anchor.kind === 'unloaded')) {
         release(); nav = null; buttons.clear(); return false
       }
       if (candidate !== nav) release()
@@ -91,6 +100,9 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       // Keep the original React owner callable while exposing only Piano.
       nav.style.setProperty('display', 'none', 'important')
       nav.setAttribute('aria-hidden', 'true')
+      // Scrollbar dragging and selecting transcript text are reader intent
+      // too; these need not emit wheel, touchstart or a navigation key.
+      scrollport?.addEventListener('pointerdown', readerPointer, { passive: true })
     },
     active(): number | null {
       for (const [turn, button] of buttons) if (button.getAttribute('aria-current') === 'true') return turn
@@ -103,7 +115,6 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       const row = anchorKey === null ? null : rowFor(anchorKey)
       if (button?.isConnected) {
         issuedUnloaded = anchorKey === null
-        // This is the real handler; it owns loadThrough and all pending jumps.
         button.click()
       } else if (turns.length !== 1 || row === null) return false
       if (row !== null) {
@@ -135,4 +146,5 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       }
     },
   }
+  return api
 }
