@@ -21,6 +21,15 @@ body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-role="assistant"] {
   --smcp-key: var(--smcp-assistant-color, #a78bfa);
   --smcp-key-active: var(--smcp-assistant-active-color, #c4b5fd);
 }
+body[data-ds-dark-theme] .smcp-tooltip,
+body[data-ds-dark-theme] .smcp-tooltip-title,
+body[data-ds-dark-theme] .smcp-key-label {
+  color: var(--dsw-alias-label-primary, #f1f1f3);
+}
+body[data-ds-dark-theme] .smcp-tooltip-body,
+body[data-ds-dark-theme] .smcp-navigation-status {
+  color: var(--dsw-alias-label-secondary, #b7bac3);
+}
 .smcp-unified .smcp-bar[data-kind="final"] {
   box-shadow: 0 3px 0 -1px currentColor;
 }

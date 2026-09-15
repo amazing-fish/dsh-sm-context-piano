@@ -38,8 +38,6 @@ await build({
   plugins: [{ name: 'non-business-leaves', setup(b) {
     b.onResolve({ filter: /^(\.\/MessageItem\.tsx|\.\/message-chrome\.ts|\.\/icons\/index\.tsx|@deepseek-ai\/dsh-client-ui-primitives)$/ }, () => ({ path: path.resolve('scripts/semantic-browser-leaves.tsx') }))
     b.onResolve({ filter: /^(clsx|@deepseek-ai\/dsh-session\/types)$/ }, () => ({ path: `${dir}/helpers.ts` }))
-    // The published store imports host-provided libraries that are deliberately
-    // not plugin dependencies. Resolve the test-only copies explicitly.
     b.onResolve({ filter: /^(zustand(?:\/.*)?|immer)$/ }, args => ({ path: tools.resolve(args.path) }))
     b.onResolve({ filter: /^react(?:\/.*)?$/ }, args => ({ path: local.resolve(args.path) }))
   } }],
@@ -60,6 +58,7 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
 await context.tracing.start({ screenshots: true, snapshots: true })
 const page = await context.newPage()
 let errors = [], passed = 0
+const darkContrast = []
 page.on('pageerror', error => errors.push(error.message))
 const key = (kind, turn = 2) => page.locator(`.smcp-bar[data-kind="${kind}"][data-turn="${turn}"]`)
 const start = async () => { errors = []; await page.goto(`http://127.0.0.1:${server.address().port}/`); await page.waitForFunction(() => window.__smcpDebug?.mode === 'piano') }
@@ -103,7 +102,7 @@ try {
     assert.equal(await key('question').first().evaluate(el => el === window.savedQuestionKey), true)
     assert.equal(await key('final').count(), 1)
   })
-  await test('roles differ in light/dark themes and remain distinct when hovered/current', async () => {
+  await test('roles retain light/dark colours and dark preview fallback remains legible', async () => {
     const user = key('input').first(), ai = key('final').first()
     assert.notEqual(await colour(user), await colour(ai))
     await activate(user); const selectedUser = await colour(user)
@@ -112,6 +111,18 @@ try {
     await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', 'true'))
     const darkUser = await colour(user), darkAI = await colour(ai)
     assert.notEqual(darkUser, darkAI); assert.notEqual(darkUser, selectedUser)
+    const contrast = await page.locator('.smcp-tooltip').evaluate(el => {
+      const rgb = value => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+      const luminance = values => values.map(value => value / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
+        .reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0)
+      const background = luminance(rgb(getComputedStyle(el).backgroundColor))
+      return ['.smcp-key-label', '.smcp-tooltip-title', '.smcp-tooltip-body'].map(selector => {
+        const foreground = luminance(rgb(getComputedStyle(el.querySelector(selector)).color))
+        return { selector, ratio: (Math.max(background, foreground) + .05) / (Math.min(background, foreground) + .05) }
+      })
+    })
+    for (const value of contrast) assert.ok(value.ratio >= 4.5, `${value.selector}: contrast ${value.ratio}`)
+    darkContrast.push(...contrast)
     await page.screenshot({ path: 'test-results/semantic-keys-dark.png', fullPage: true })
   })
   await test('question answer preview preserves custom multi-select content and roles', async () => {
@@ -131,7 +142,7 @@ try {
     await page.waitForSelector('.smcp-unified', { state: 'detached' }); await page.waitForTimeout(100)
     assert.equal((await page.evaluate(() => window.semanticFixture.summary())).submissionCalls, 0)
   })
-  await writeFile('test-results/semantic-browser-summary.json', JSON.stringify({ passed, pinned, hashes, errors, note: 'Original ChatView, ChatNodeSeat, searchable-hidden, stores, DisclosureRow and AskQuestionCard; synthetic transport/messages and icon/classname helpers.' }, null, 2))
+  await writeFile('test-results/semantic-browser-summary.json', JSON.stringify({ passed, pinned, hashes, errors, darkContrast, note: 'Original ChatView, ChatNodeSeat, searchable-hidden, stores, DisclosureRow and AskQuestionCard; synthetic transport/messages and icon/classname helpers.' }, null, 2))
   console.log(`${passed} semantic Chromium checks passed`)
 } catch (error) {
   await page.screenshot({ path: 'test-results/semantic-failure.png', fullPage: true })
