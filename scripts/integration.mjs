@@ -1,4 +1,4 @@
-/** jsdom behavior checks for the Codex-style navigator. */
+/** jsdom behavior checks for the Codex-style navigator on the modern Chat target. */
 
 import { createRequire } from 'node:module'
 import assert from 'node:assert/strict'
@@ -29,11 +29,11 @@ const { document } = window
 
 globalThis.window = window
 globalThis.document = document
-globalThis.MutationObserver = window.MutationObserver
-globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window)
-globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window)
-globalThis.IS_REACT_ACT_ENVIRONMENT = true
-globalThis.ResizeObserver = class {
+ globalThis.MutationObserver = window.MutationObserver
+ globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window)
+ globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window)
+ globalThis.IS_REACT_ACT_ENVIRONMENT = true
+ globalThis.ResizeObserver = class {
   observe() {}
   disconnect() {}
 }
@@ -74,15 +74,25 @@ const contentTops = [40, 260, 700, 900, 1100, 1200, 1280]
 const appendRow = index => {
   const row = document.createElement('div')
   row.dataset.chatAnchorKey = keys[index]
+  row.dataset.chatTurn = String(nodeMap.get(keys[index])?.data.turn ?? 1)
   Object.defineProperty(row, 'getBoundingClientRect', {
     value: () => ({ left: 300, top: contentTops[index] - scrollport.scrollTop, right: 1048, bottom: contentTops[index] + 160 - scrollport.scrollTop, width: 748, height: 160 }),
     configurable: true,
   })
   flow.appendChild(row)
 }
-keys.forEach((_, index) => appendRow(index))
 root.appendChild(scrollport)
-scrollport.appendChild(flow)
+// A sibling navigation fixture detects unintended DOM takeover, not the real
+// official Navigator's scroll restoration (that requires a host browser test).
+const officialNav = document.createElement('nav')
+officialNav.setAttribute('aria-label', 'Official Turn navigation fixture')
+const officialButton = document.createElement('button')
+officialButton.textContent = 'Turn 1'
+officialNav.appendChild(officialButton)
+scrollport.append(officialNav, flow)
+const officialHtml = officialNav.outerHTML
+let officialClicks = 0
+officialButton.addEventListener('click', () => { officialClicks += 1 })
 document.body.appendChild(root)
 
 const nodeMap = new Map([
@@ -115,12 +125,38 @@ const nodeMap = new Map([
     data: { turn: 1, closing: null },
   }],
 ])
-const snapshot = { chat: { order: [...keys], nodes: { get: key => nodeMap.get(key) } } }
+keys.forEach((_, index) => appendRow(index))
+const nodeSources = new Map()
+const nodeSubscribers = new Map()
+const snapshot = { chat: { order: [...keys], nodes: {
+  get: key => nodeMap.get(key),
+  source: key => {
+    if (!nodeSources.has(key)) {
+      const listeners = new Set()
+      nodeSubscribers.set(key, listeners)
+      nodeSources.set(key, {
+        getSnapshot: () => nodeMap.get(key),
+        subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) },
+      })
+    }
+    return nodeSources.get(key)
+  },
+} } }
 let snapshotSubscriber = () => {}
-const session = {
-  getSnapshot: () => snapshot,
-  subscribe: fn => { snapshotSubscriber = fn; return () => { snapshotSubscriber = () => {} } },
+let targetSubscriptions = 0
+const chatTarget = {
+  getSnapshot: () => snapshot.chat,
+  subscribe: fn => {
+    targetSubscriptions += 1
+    snapshotSubscriber = fn
+    return () => { targetSubscriptions -= 1; snapshotSubscriber = () => {} }
+  },
 }
+const session = {
+  getSnapshot: () => { throw new Error('Piano must not read Chat from the Session snapshot') },
+  subscribe: () => { throw new Error('Piano must subscribe to the Chat target, not Session') },
+}
+let sessionBinding = { session }
 let currentSession = 's1'
 let listSubscriber = () => {}
 let settingsSnapshot = {
@@ -154,7 +190,13 @@ const ctx = {
       getSnapshot: () => ({ current: currentSession }),
       subscribe: fn => { listSubscriber = fn; return () => { listSubscriber = () => {} } },
     },
-    binding: id => id === 's1' ? { session } : undefined,
+    binding: id => id === 's1' ? sessionBinding : undefined,
+  },
+  uiConversation: {
+    binding: binding => {
+      assert.equal(binding, sessionBinding)
+      return { target: name => { assert.equal(name, 'chat'); return chatTarget } }
+    },
   },
   settingsScope: {
     bind: spec => {
@@ -203,7 +245,6 @@ await check('registers the first-level settings page directly after Agent Preset
   assert.equal(settingsSection.options.order, 21)
   assert.equal(settingsSection.options.label(), 'settings.nav')
   assert.equal(settingsSection.options.inject().scope, settingsScope)
-
   const React = requireHere('react')
   const { act } = React
   const { createRoot } = requireHere('react-dom/client')
@@ -217,9 +258,7 @@ await check('registers the first-level settings page directly after Agent Preset
   })
   await act(async () => {
     rootView.render(React.createElement(settingsSection.component, {
-      ...settingsSection.options.inject(),
-      close: () => {},
-      t: key => key,
+      ...settingsSection.options.inject(), close: () => {}, t: key => key,
     }))
     await waitFrame()
   })
@@ -280,16 +319,10 @@ await check('registers the first-level settings page directly after Agent Preset
   assert.match(mount.textContent, /安裝命令/)
   assert.equal(settingsSection.options.label(), 'settings.nav')
   assert.equal(document.querySelector('.smcp-strip').getAttribute('aria-label'), 'nav.aria')
-  await act(async () => {
-    mount.querySelector('.smcp-settings-reset').click()
-    await waitFrame()
-  })
+  await act(async () => { mount.querySelector('.smcp-settings-reset').click(); await waitFrame() })
   assert.equal(settingsSnapshot.value.language, 'zh')
   assert.match(mount.textContent, /显示设置/)
-  await act(async () => {
-    commandBox.querySelector('button').click()
-    await Promise.resolve()
-  })
+  await act(async () => { commandBox.querySelector('button').click(); await Promise.resolve() })
   assert.equal(copiedCommand, 'dsh plugin --profile web add @hjj345345/dsh-sm-context-piano')
   assert.equal(mount.querySelector('.smcp-settings-command-box button').textContent, '已复制')
   const styles = document.querySelector('#smcp-panel-styles').textContent
@@ -315,10 +348,11 @@ await check('live settings resize, limit, disable, and restore the rail', async 
   let strip = document.querySelector('.smcp-strip')
   assert.equal(Number.parseFloat(strip.style.height), 36)
   assert.ok([...document.querySelectorAll('.smcp-bar')].every(bar => Number.parseFloat(bar.style.height) === 4))
-
   await settingsScope.set('enabled', false)
   await waitFrame()
   assert.equal(document.querySelector('.smcp-strip'), null)
+  assert.equal(targetSubscriptions, 0)
+  assert.ok([...nodeSubscribers.values()].every(listeners => listeners.size === 0))
   await settingsScope.set('enabled', true)
   await settingsScope.set('keyHeight', 2)
   await settingsScope.set('keyGap', 12)
@@ -328,6 +362,7 @@ await check('live settings resize, limit, disable, and restore the rail', async 
   strip = document.querySelector('.smcp-strip')
   assert.ok(strip)
   assert.equal(Number.parseFloat(strip.style.height), 230)
+  assert.equal(targetSubscriptions, 1)
 })
 
 await check('keeps a compact fixed-pitch stack centered in the rail', () => {
@@ -396,7 +431,7 @@ await check('snapshot updates retain existing marker elements', async () => {
   assert.equal(document.querySelector('[data-key="user:1"]'), first)
 })
 
-await check('an open preview follows streaming descriptor updates', async () => {
+await check('an open preview follows keyed-only streaming descriptor updates', async () => {
   const strip = document.querySelector('.smcp-strip')
   const last = document.querySelector('[data-key="assistant:7::output:0"]')
   const y = Number.parseFloat(last.style.top) + Number.parseFloat(last.style.height) / 2
@@ -406,7 +441,7 @@ await check('an open preview follows streaming descriptor updates', async () => 
     key: 'assistant:7', kind: 'assistant-step', anchorSeq: 7,
     data: { turn: 2, step: 0, blocks: [{ kind: 'text', text: '流式更新后的回复\n预览必须同步刷新。' }] },
   })
-  snapshotSubscriber()
+  for (const notify of nodeSubscribers.get('assistant:7')) notify()
   await waitFrame()
   assert.match(document.querySelector('.smcp-tooltip').textContent, /流式更新后的回复/)
 })
@@ -417,6 +452,44 @@ await check('keyboard navigation previews and activates a marker', async () => {
   strip.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   await waitFrame()
   assert.equal(scrollport.scrollTop, contentTops[7] - 16)
+})
+
+await check('hidden row changes and reduced-motion jumps respect the current DOM', async () => {
+  const row = flow.querySelector('[data-chat-anchor-key="user:1"]')
+  row.hidden = true
+  await waitFrame()
+  assert.equal(document.querySelector('[data-key="user:1"]').hidden, true)
+  row.hidden = false
+  await waitFrame()
+  const originalScrollTo = scrollport.scrollTo
+  let received
+  scrollport.scrollTo = options => { received = options; originalScrollTo(options) }
+  window.matchMedia = () => ({ matches: true })
+  const oldTop = contentTops[0]
+  contentTops[0] = oldTop + 30
+  document.querySelector('[data-key="user:1"]').click()
+  assert.equal(received.top, contentTops[0] - 16)
+  assert.equal(received.behavior, 'auto')
+  contentTops[0] = oldTop
+  window.matchMedia = () => ({ matches: false })
+  scrollport.scrollTo = originalScrollTo
+})
+
+await check('sibling official navigation fixture remains untouched and interactive', () => {
+  assert.equal(officialNav.outerHTML, officialHtml)
+  assert.equal(officialNav.parentElement, scrollport)
+  officialButton.click()
+  assert.equal(officialClicks, 1)
+})
+
+await check('same-ID binding replacement releases old subscriptions and rebinds once', async () => {
+  sessionBinding = { session }
+  listSubscriber()
+  await waitFrame()
+  assert.equal(targetSubscriptions, 1)
+  assert.equal(globalThis.__smcpDebug.sessionId, 's1')
+  assert.equal(document.querySelectorAll('.smcp-bar').length, 4)
+  assert.ok([...nodeSubscribers.values()].every(listeners => listeners.size <= 1))
 })
 
 await check('shows at most 20 keys and recenters after selecting the top boundary', async () => {
@@ -445,7 +518,6 @@ await check('shows at most 20 keys and recenters after selecting the top boundar
   assert.equal(globalThis.__smcpDebug.windowStart, 3)
   assert.equal(document.querySelector('[data-key="user:window:2"]').hidden, true)
   assert.equal(document.querySelector('[data-key="user:window:3"]').hidden, false)
-
   const strip = document.querySelector('.smcp-strip')
   const top = document.querySelector('[data-key="user:window:3"]')
   const topY = Number.parseFloat(top.style.top) + Number.parseFloat(top.style.height) / 2
@@ -477,12 +549,27 @@ await check('a single rendered node stays centered on the rail', async () => {
   assert.ok(Math.abs(center - Number.parseFloat(strip.style.height) / 2) < 0.2)
 })
 
+await check('narrow containers hide the Piano without hiding official navigation', async () => {
+  Object.defineProperty(root, 'clientWidth', { value: 500, configurable: true })
+  window.dispatchEvent(new window.Event('resize'))
+  await waitFrame()
+  assert.equal(globalThis.__smcpDebug.hiddenReason, 'narrow')
+  assert.equal(officialNav.outerHTML, officialHtml)
+  Object.defineProperty(root, 'clientWidth', { value: 1280, configurable: true })
+  window.dispatchEvent(new window.Event('resize'))
+  await waitFrame()
+})
+
 await check('session disappearance clears markers without stale content', async () => {
+  const oldNotify = snapshotSubscriber
   currentSession = undefined
   listSubscriber()
+  oldNotify()
   await waitFrame()
   assert.equal(document.querySelectorAll('.smcp-bar').length, 0)
   assert.equal(globalThis.__smcpDebug.sessionId, undefined)
+  assert.equal(targetSubscriptions, 0)
+  assert.ok([...nodeSubscribers.values()].every(listeners => listeners.size === 0))
 })
 
 await check('dispose removes every injected runtime surface', () => {
@@ -490,6 +577,7 @@ await check('dispose removes every injected runtime surface', () => {
   assert.equal(document.querySelector('.smcp-strip'), null)
   assert.equal(document.querySelector('.smcp-tooltip'), null)
   assert.equal(globalThis.__smcpDebug, undefined)
+  assert.equal(officialNav.outerHTML, officialHtml)
 })
 
 console.log(`\n${passed} integration checks passed, ${failed} failed`)

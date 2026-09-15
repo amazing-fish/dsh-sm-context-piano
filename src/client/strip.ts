@@ -1,7 +1,11 @@
 /** Fixed-window Codex-style navigator for user and visible assistant output. */
 
-import type { ChatConversationViewNode, ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
+import { observeChatNodes } from './chat-source.ts'
 import { buildNavigationNodes } from './keys.ts'
 import type { KeyDescriptor } from './keys.ts'
 import { updateTooltip } from './tooltip.ts'
@@ -169,6 +173,7 @@ function mountStrip(
   let alive = true
   let markers: Marker[] = []
   let sessionId: SessionId | undefined
+  let activeBinding: SessionBinding | undefined
   let sessionUnsub: (() => void) | undefined
   let retryTimer: ReturnType<typeof setTimeout> | undefined
   let retryCount = 0
@@ -270,6 +275,8 @@ function mountStrip(
 
     const rows = new Map<string, HTMLElement>()
     for (const row of flow.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
+      // Compact mode keeps some materialized rows under a hidden ancestor.
+      if (row.closest('[hidden]') !== null) continue
       const key = row.dataset.chatAnchorKey
       if (key !== undefined) rows.set(key, row)
     }
@@ -344,47 +351,47 @@ function mountStrip(
     scheduleLayout()
   }
 
-  const rebuild = (): void => {
-    if (!alive || sessionId === undefined) return
-    const session = ctx.sessions.binding(sessionId)?.session
-    if (session === undefined) return
-    const snapshot = session.getSnapshot()
-    const nodes: ChatConversationViewNode[] = []
-    for (const key of snapshot.chat.order) {
-      const node = snapshot.chat.nodes.get(key)
-      if (node !== undefined) nodes.push(node)
-    }
-    reconcileMarkers(buildNavigationNodes(nodes))
-  }
-
   const bindSession = (): void => {
     if (!alive) return
     const nextId = ctx.sessions.list.getSnapshot().current
-    if (nextId !== sessionId) {
+    const nextBinding = nextId === undefined ? undefined : ctx.sessions.binding(nextId)
+    if (nextId !== sessionId || nextBinding !== activeBinding) {
       sessionUnsub?.()
       sessionUnsub = undefined
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       retryTimer = undefined
       retryCount = 0
       sessionId = nextId
+      activeBinding = nextBinding
       debug.sessionId = nextId === undefined ? undefined : String(nextId)
+      currentKey = null
+      latestPointerY = null
+      setHover(null)
       reconcileMarkers([])
     }
     if (sessionId === undefined || sessionUnsub !== undefined) return
-    const session = ctx.sessions.binding(sessionId)?.session
-    if (session === undefined) {
+    if (nextBinding === undefined) {
+      if (retryTimer !== undefined) return
       if (retryCount < BIND_RETRY_MAX) {
         retryCount += 1
-        retryTimer = window.setTimeout(bindSession, BIND_RETRY_MS)
+        retryTimer = window.setTimeout(() => {
+          retryTimer = undefined
+          bindSession()
+        }, BIND_RETRY_MS)
       } else {
         console.warn('[dsh-sm-context-piano] session binding unavailable:', String(sessionId))
       }
       return
     }
     retryCount = 0
+    if (retryTimer !== undefined) window.clearTimeout(retryTimer)
     retryTimer = undefined
-    sessionUnsub = session.subscribe(rebuild)
-    rebuild()
+    // The Session controller no longer owns Chat. Use the same public target
+    // as the official Chat view and subscribe to keyed content updates too.
+    const target = ctx.uiConversation.binding(nextBinding).target('chat')
+    sessionUnsub = observeChatNodes(target, nodes => {
+      if (alive && activeBinding === nextBinding) reconcileMarkers(buildNavigationNodes(nodes))
+    })
   }
 
   const nearestMarker = (localY: number): Marker | null => {
@@ -419,11 +426,14 @@ function mountStrip(
   }
 
   const jumpTo = (marker: Marker | null): void => {
-    if (marker === null || marker.row === null) return
+    if (marker === null || marker.row === null || !marker.row.isConnected || marker.row.closest('[hidden]') !== null) return
     setCurrent(marker.descriptor.key)
     scheduleLayout()
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-    scrollport.scrollTo({ top: Math.max(0, marker.contentY - 16), behavior: reduceMotion ? 'auto' : 'smooth' })
+    // Measure at activation: streaming/reflow can invalidate cached geometry.
+    // This is only a loaded-row jump; full-history navigation remains official.
+    const top = marker.row.getBoundingClientRect().top - scrollport.getBoundingClientRect().top + scrollport.scrollTop
+    scrollport.scrollTo({ top: Math.max(0, top - 16), behavior: reduceMotion ? 'auto' : 'smooth' })
   }
 
   const onClick = (event: MouseEvent): void => {
@@ -466,7 +476,7 @@ function mountStrip(
   }
 
   const flowObserver = new MutationObserver(scheduleLayout)
-  flowObserver.observe(flow, { childList: true })
+  flowObserver.observe(flow, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] })
   const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleLayout)
   resizeObserver?.observe(root)
   resizeObserver?.observe(scrollport)
