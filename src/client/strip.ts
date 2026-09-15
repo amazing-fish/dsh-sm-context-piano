@@ -151,13 +151,14 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   const readingKey = (): string | null => {
     const line = scrollport.getBoundingClientRect().top + Math.min(120, scrollport.clientHeight * .18)
     let key: string | null = null
-    // Only loaded rendered anchors participate; the full-history outline is
-    // never subjected to DOM geometry scans.
+    const measured = new Map<string, number>()
     for (const item of items) {
       if (item.anchorKey === null) continue
       const row = owner.rowFor(item.anchorKey)
       if (row === null) continue
-      if (key === null || row.getBoundingClientRect().top <= line) key = item.key
+      let y = measured.get(item.anchorKey)
+      if (y === undefined) { y = row.getBoundingClientRect().top; measured.set(item.anchorKey, y) }
+      if (key === null || y <= line) key = item.key
     }
     return key
   }
@@ -166,10 +167,10 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     const loaded = snapshot?.navigation.items() ?? []
     const outline = binding?.session.projections.faceOf('turnOutline').getSnapshot()
     const turns = mergeNavigationTurns(loaded, outline)
+    nativeReady = owner.reconcile(turns)
     const segments = buildNavigationNodes(nodes).filter(segment => owner.rowFor(segment.anchorKey) !== null)
     items = buildPianoItems(turns, segments, turn => copy('turn', turn))
     debug.total = items.length
-    nativeReady = owner.reconcile(turns)
     const rootRect = root.getBoundingClientRect()
     const flowLeft = flow.getBoundingClientRect().left - rootRect.left
     const width = root.clientWidth || rootRect.width
@@ -191,7 +192,10 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     }
     active = readingKey() ?? `turn:${owner.active() ?? turns.at(-1)?.turn}`
     if (selected !== null && !items.some(item => item.key === selected)) selected = null
-    const center = Math.max(0, items.findIndex(item => item.key === active))
+    // Keep the user's target in the fixed window while the native pager is
+    // loading or keyboard focus is in the rail, rather than snapping to the tail.
+    const centerKey = selected !== null && (document.activeElement === strip || pointerInside || busy !== null) ? selected : active
+    const center = Math.max(0, items.findIndex(item => item.key === centerKey))
     const manual = browseStart === null ? -1 : items.findIndex(item => item.key === browseStart)
     windowStart = manual < 0 ? visibleWindow(items.length, center, capacity).start
       : Math.max(0, Math.min(items.length - capacity, manual))
@@ -281,7 +285,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       stops.push(observeChatNodes(target, value => { if (alive && binding === next) { nodes = value; schedule() } }))
       stops.push(next.session.projections.faceOf('turnOutline').subscribe(schedule))
       stops.push(next.session.subscribe(schedule))
-      sourceStop = () => { for (const dispose of stops.reverse()) dispose() }
+      sourceStop = () => { for (const dispose of stops) dispose() }
     } catch (error) {
       for (const dispose of stops.reverse()) dispose()
       throw error
@@ -343,6 +347,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     schedule()
   }
   const readerKey = (event: KeyboardEvent): void => {
+    if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') !== null) return
     if (['ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', ' '].includes(event.key)) cancel()
   }
   const onScroll = (): void => { if (!pointerInside && document.activeElement !== strip) browseStart = null; schedule() }
@@ -364,7 +369,6 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   const dispose = (): void => {
     if (!alive) return
     alive = false
-    // Only cancel against the same current session, never a newly selected view.
     if (binding?.session.sessionId === ctx.sessions.list.getSnapshot().current) owner.cancel()
     owner.release()
     sourceStop?.(); listStop(); settingsStop(); dom.disconnect(); resize?.disconnect()
