@@ -52,10 +52,14 @@ jobs:
         with:
           version: '10.17.1'
       - run: pnpm install --frozen-lockfile
-      - run: npm install --prefix .browser-tools --no-save --ignore-scripts playwright@1.55.1 esbuild@0.28.2
+      # DSH's published store bundle expects these host-provided libraries.
+      # Match the pinned source baseline without changing plugin dependencies.
+      - run: npm install --prefix .browser-tools --no-save --ignore-scripts playwright@1.55.1 esbuild@0.28.2 zustand@4.4.7 immer@10.1.1 react@18.3.1
       - run: node .browser-tools/node_modules/playwright/cli.js install --with-deps chromium
       - run: node scripts/browser.mjs
       - run: node scripts/semantic-browser.mjs
+        env:
+          NODE_PATH: ${{ github.workspace }}/.browser-tools/node_modules
       - uses: actions/upload-artifact@v4
         if: always()
         with:
