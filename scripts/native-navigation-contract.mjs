@@ -1,4 +1,4 @@
-/** Native bridge regression boundaries, including the Codex single-Turn finding. */
+/** Native bridge regression boundaries, including the Codex ownership findings. */
 import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
 import { createNativeNavigation } from '../src/client/native-navigation.ts'
@@ -82,5 +82,45 @@ test('release removes pointer cancellation hooks from native-only mode', f => {
   nav.children[0].onclick = () => { pending = 1 }; nav.children[1].onclick = () => { pending = null }
   f.owner.reconcile(items); f.owner.claim(); f.owner.navigate(1, null); f.owner.release()
   f.scroll.dispatchEvent(new f.dom.window.Event('pointerdown')); assert.equal(pending, 1)
+})
+test('fallback input callbacks cannot cancel a jump started through restored native UI', f => {
+  const items = [turn(1, false), turn(2)]
+  const nav = f.addNav(items); let cancelClicks = 0
+  nav.children[1].onclick = () => { cancelClicks++ }
+  f.owner.reconcile(items); f.owner.claim(); f.owner.release()
+  nav.children[0].setAttribute('aria-busy', 'true')
+  // The strip's wheel/touch/reading-key handlers all reach this same method.
+  f.owner.cancel(); f.owner.cancel(); f.owner.cancel()
+  assert.equal(cancelClicks, 0)
+  assert.equal(nav.children[0].getAttribute('aria-busy'), 'true')
+  assert.equal(f.owner.navigate(1, null), false)
+})
+test('release and reclaim cannot carry an old unloaded sentinel into ordinary reader input', f => {
+  const items = [turn(1, false), turn(2)]
+  const nav = f.addNav(items); let cancelClicks = 0
+  nav.children[1].onclick = () => { cancelClicks++ }
+  f.owner.reconcile(items); f.owner.claim(); f.owner.navigate(1, null)
+  f.owner.release(); f.owner.claim()
+  f.scroll.dispatchEvent(new f.dom.window.Event('pointerdown'))
+  assert.equal(cancelClicks, 0)
+})
+test('the first reconciled idle native publication retires synchronous unloaded intent', f => {
+  const items = [turn(1, false), turn(2)]
+  const nav = f.addNav(items); let cancelClicks = 0
+  nav.children[1].onclick = () => { cancelClicks++ }
+  f.owner.reconcile(items); f.owner.claim(); f.owner.navigate(1, null)
+  // A fast failure can settle without a rendered busy frame.
+  f.owner.reconcile(items)
+  f.scroll.dispatchEvent(new f.dom.window.Event('pointerdown'))
+  assert.equal(cancelClicks, 0)
+})
+test('after publication real native busy remains cancellable until settlement', f => {
+  const items = [turn(1, false), turn(2)]
+  const nav = f.addNav(items); let cancelClicks = 0
+  nav.children[1].onclick = () => { cancelClicks++; nav.children[0].removeAttribute('aria-busy') }
+  f.owner.reconcile(items); f.owner.claim(); f.owner.navigate(1, null)
+  nav.children[0].setAttribute('aria-busy', 'true'); f.owner.reconcile(items)
+  f.owner.cancel(); assert.equal(cancelClicks, 1)
+  f.owner.reconcile(items); f.owner.cancel(); assert.equal(cancelClicks, 1)
 })
 console.log(`${passed} native navigation boundary tests passed`)

@@ -19,6 +19,8 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   let buttons = new Map<number, HTMLButtonElement>()
   let turns: readonly NavigationTurn[] = []
   let rows = new Map<string, HTMLElement>()
+  // Only bridges synchronous input before the next native DOM publication.
+  // Once reconciled, the native aria-busy state is the sole pending authority.
   let issuedUnloaded = false
   const readerPointer = (event: Event): void => {
     const target = event.target as HTMLElement | null
@@ -32,6 +34,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     }
   }
   const release = (): void => {
+    issuedUnloaded = false
     scrollport?.removeEventListener('pointerdown', readerPointer)
     if (saved === undefined) return
     const old = saved
@@ -92,6 +95,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       if (candidate !== nav) release()
       nav = candidate
       buttons = nextButtons
+      issuedUnloaded = false
       return true
     },
     claim(): void {
@@ -114,6 +118,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       const button = buttons.get(turn)
       const row = anchorKey === null ? null : rowFor(anchorKey)
       if (button?.isConnected) {
+        if (saved === undefined) return false
         issuedUnloaded = anchorKey === null
         button.click()
       } else if (turns.length !== 1 || row === null) return false
@@ -125,8 +130,9 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     },
     /** Cancel landing, not shared network I/O, through the native superseding action. */
     cancel(): void {
-      // issuedUnloaded also covers Escape before React commits aria-busy.
-      if (scrollport === null || (!issuedUnloaded && busy() === null)) return
+      // All input routes (wheel/touch/keyboard/pointer/dispose) share this
+      // ownership gate. Native fallback must not be controlled by a hidden Piano.
+      if (saved === undefined || scrollport === null || (!issuedUnloaded && busy() === null)) return
       refreshRows()
       const top = scrollport.scrollTop
       const line = scrollport.getBoundingClientRect().top + 24
