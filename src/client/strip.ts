@@ -328,10 +328,11 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     const index = Math.max(0, Math.min(items.length - Math.max(1, buttons.size), windowStart + Math.sign(event.deltaY) * 3))
     browseStart = items[index]?.key ?? null; selected = null; schedule()
   }
-  const cancel = (): void => {
-    activation++; landing.cancel(); owner.cancel()
+  const cancelLocal = (): void => {
+    activation++; landing.cancel()
     requestedTurn = failedTurn = null; localFailure = false; schedule()
   }
+  const cancel = (): void => { cancelLocal(); owner.cancel() }
   const keydown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') { event.preventDefault(); cancel(); selected = null; browseStart = null; return }
     if (event.key === 'Enter' || event.key === ' ') {
@@ -351,7 +352,9 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (['ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', ' '].includes(event.key)) cancel()
   }
   const readerPointer = (event: Event): void => {
-    if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') === null) cancel()
+    // NativeNavigation already handles pointerdown once, including touch.
+    // This listener only retires the short local disclosure transaction.
+    if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') === null) cancelLocal()
   }
   const onScroll = (): void => { if (!pointerInside && document.activeElement !== strip) browseStart = null; schedule() }
   const dom = new MutationObserver(schedule)
@@ -361,7 +364,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   strip.addEventListener('pointermove', pointerMove); strip.addEventListener('pointerleave', pointerLeave)
   strip.addEventListener('click', click); strip.addEventListener('wheel', wheel, { passive: false }); strip.addEventListener('keydown', keydown)
   scrollport.addEventListener('scroll', onScroll, { passive: true }); scrollport.addEventListener('wheel', cancel, { passive: true })
-  scrollport.addEventListener('touchstart', cancel, { passive: true }); scrollport.addEventListener('pointerdown', readerPointer, { passive: true })
+  scrollport.addEventListener('touchstart', readerPointer, { passive: true }); scrollport.addEventListener('pointerdown', readerPointer, { passive: true })
   scrollport.addEventListener('keydown', readerKey)
   const listStop = ctx.sessions.list.subscribe(() => { retries = 0; bind() })
   const settingsStop = settings.subscribe(schedule)
@@ -373,7 +376,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (retry !== undefined) clearTimeout(retry)
     if (frame !== 0) window.cancelAnimationFrame(frame)
     scrollport.removeEventListener('scroll', onScroll); scrollport.removeEventListener('wheel', cancel)
-    scrollport.removeEventListener('touchstart', cancel); scrollport.removeEventListener('pointerdown', readerPointer)
+    scrollport.removeEventListener('touchstart', readerPointer); scrollport.removeEventListener('pointerdown', readerPointer)
     scrollport.removeEventListener('keydown', readerKey)
     strip.remove(); tooltip.remove(); style.remove()
     if (forcedPosition && root.style.position === 'relative') root.style.position = originalPosition

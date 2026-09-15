@@ -58,7 +58,10 @@ function rebuild() {
   const store = {
     get: (key: string) => nodes.get(key),
     source: (key: string) => {
-      if (!sources.has(key)) sources.set(key, { getSnapshot: () => nodes.get(key), subscribe: chat.subscribe })
+      // Each key has an independently disposable subscription even though the
+      // synthetic fixture publishes through one bus. Removing a key must not
+      // delete the target subscription that happens to use the same callback.
+      if (!sources.has(key)) sources.set(key, { getSnapshot: () => nodes.get(key), subscribe: (fn: () => void) => chat.subscribe(() => fn()) })
       return sources.get(key)
     },
   }
