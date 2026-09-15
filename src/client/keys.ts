@@ -1,6 +1,6 @@
 /** User inputs, visible assistant runs, final answers and human question exchanges. */
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
-import { questionKeys } from './question-keys.ts'
+import { buildQuestionKeys } from './question-keys.ts'
 
 export type KeyKind = 'input' | 'output' | 'final' | 'question' | 'answer'
 export interface KeyDescriptor {
@@ -44,7 +44,6 @@ export function turnOf(node: ChatConversationViewNode): number | null {
   const location = record(node.location)
   const located = typeof location.turn === 'object' ? record(location.turn).turn : location.turn
   if (integer(located)) return located
-  // Compatibility with older plain payload fixtures; never use order/index.
   const turn = record(node.data).turn
   return integer(turn) ? turn : null
 }
@@ -68,22 +67,14 @@ function outputRuns(data: Record<string, unknown>): OutputRuns {
     else flush()
   }
   flush()
-  return {
-    runs,
-    startsWithText: record(data.blocks[0]).kind === 'text',
-    endsWithText: record(data.blocks.at(-1)).kind === 'text',
-  }
+  return { runs, startsWithText: record(data.blocks[0]).kind === 'text', endsWithText: record(data.blocks.at(-1)).kind === 'text' }
 }
 function descriptor(node: ChatConversationViewNode, role: 'user' | 'assistant', text: string, kind: KeyKind, suffix = ''): KeyDescriptor {
   const preview = truncate(text, PREVIEW_LIMIT)
   return { key: `${node.key}${suffix}`, anchorKey: node.key, role, title: titleOf(preview), preview, turn: turnOf(node), kind }
 }
 
-/**
- * The durable Turn tail names the actual closing assistant. A settled model
- * step or the last visible row alone does NOT establish a final Turn answer.
- * Missing/truncated/failed evidence must never promote process prose to final.
- */
+/** A completed model step alone does not establish the final Turn answer. */
 function finalKeys(nodes: readonly ChatConversationViewNode[]): Set<string> {
   const closing = new Map<number, Record<string, unknown>>()
   const failed = new Set<number>()
@@ -113,12 +104,12 @@ function finalKeys(nodes: readonly ChatConversationViewNode[]): Set<string> {
     const list = candidates.get(turn) ?? []
     list.push(node); candidates.set(turn, list)
   }
-  // Ambiguous duplicate material is not a basis for guessing which row is final.
   return new Set([...candidates.values()].filter(list => list.length === 1).map(list => list[0].key))
 }
 
 export function buildNavigationNodes(nodes: readonly ChatConversationViewNode[]): KeyDescriptor[] {
   const finals = finalKeys(nodes)
+  const questions = buildQuestionKeys(nodes, turnOf)
   const result: KeyDescriptor[] = []
   let continuable: KeyDescriptor | null = null
   for (const node of nodes) {
@@ -132,16 +123,14 @@ export function buildNavigationNodes(nodes: readonly ChatConversationViewNode[])
     }
     if (node.kind === 'tool-call') {
       continuable = null
-      result.push(...questionKeys(node, turnOf(node)))
+      result.push(...questions.get(node.key) ?? [])
       continue
     }
     if (!ASSISTANT_KINDS.has(node.kind)) { continuable = null; continue }
     const output = outputRuns(data)
     if (output.runs.length === 0) { continuable = null; continue }
     if (finals.has(node.key)) {
-      // Exactly one independent key for the complete final message. Reuse its
-      // first output identity when streaming becomes durable; never merge it
-      // into the previous step or duplicate it alongside ordinary output keys.
+      // One key for the complete final message, never merged into process prose.
       result.push(descriptor(node, 'assistant', output.runs.join('\n\n'), 'final', '::output:0'))
       continuable = null
       continue
