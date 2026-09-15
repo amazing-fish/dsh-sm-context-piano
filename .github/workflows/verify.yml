@@ -15,10 +15,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Isolated contracts (no dependency install)
+      - name: Isolated contracts
         run: |
           node --experimental-strip-types scripts/chat-source.mjs
           node --experimental-strip-types scripts/navigation-contract.mjs
+          node --experimental-strip-types scripts/full-history-contract.mjs
 
   build-and-integration:
     strategy:
@@ -34,9 +35,28 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: '10.17.1'
-      - name: Install the committed dependency baseline
-        run: pnpm install --frozen-lockfile
-      - name: Build, typecheck and run all regression tests
-        run: pnpm verify
-      - name: Ensure verification does not rewrite the dependency lock
-        run: git diff --exit-code -- pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+      - run: git diff --exit-code -- pnpm-lock.yaml
+
+  original-chatview-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.17.1'
+      - run: pnpm install --frozen-lockfile
+      # Isolated test-only tools; never modify the plugin dependency graph.
+      - run: npm install --prefix .browser-tools --no-save --ignore-scripts playwright@1.55.1 esbuild@0.28.2
+      - run: node .browser-tools/node_modules/playwright/cli.js install --with-deps chromium
+      - run: node scripts/browser.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-chatview-browser-evidence
+          path: test-results/
