@@ -1,584 +1,227 @@
-/** jsdom behavior checks for the Codex-style navigator on the modern Chat target. */
-
-import { createRequire } from 'node:module'
+/** Single-rail DOM contracts. Real ChatView scrolling is tested separately in Chromium. */
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
 import { JSDOM } from 'jsdom'
-
-const requireHere = createRequire(import.meta.url)
-const waitFrame = () => new Promise(resolve => setTimeout(resolve, 35))
-let passed = 0
-let failed = 0
-const check = async (name, fn) => {
-  try {
-    await fn()
-    passed += 1
-    console.log(`  ok  ${name}`)
-  } catch (error) {
-    failed += 1
-    console.error(`FAIL  ${name}`)
-    console.error(error)
-  }
-}
-
-const dom = new JSDOM('<!doctype html><html><body></body></html>', {
-  url: 'http://127.0.0.1:3080/',
-  pretendToBeVisual: true,
-})
+const require = createRequire(import.meta.url)
+const dom = new JSDOM('<!doctype html><body></body>', { url: 'http://localhost/', pretendToBeVisual: true })
 const { window } = dom
 const { document } = window
-
-globalThis.window = window
-globalThis.document = document
- globalThis.MutationObserver = window.MutationObserver
- globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window)
- globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window)
- globalThis.IS_REACT_ACT_ENVIRONMENT = true
- globalThis.ResizeObserver = class {
-  observe() {}
-  disconnect() {}
+Object.assign(globalThis, { window, document, MutationObserver: window.MutationObserver, Event: window.Event })
+globalThis.ResizeObserver = class { observe() {} disconnect() {} }
+window.matchMedia = () => ({ matches: true })
+const frame = async () => { await new Promise(r => setTimeout(r, 80)) }
+const observable = value => {
+  const listeners = new Set()
+  return { getSnapshot: () => value, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) },
+    set(next) { value = next; for (const listener of [...listeners]) listener() }, emit() { for (const listener of [...listeners]) listener() }, listeners }
 }
-window.matchMedia = () => ({ matches: false })
-
-const root = document.createElement('div')
-Object.defineProperties(root, {
-  clientHeight: { value: 900, configurable: true },
-  clientWidth: { value: 1280, configurable: true },
-  getBoundingClientRect: {
-    value: () => ({ left: 0, top: 0, right: 1280, bottom: 900, width: 1280, height: 900 }),
-    configurable: true,
-  },
-})
-
-const scrollport = document.createElement('div')
-scrollport.setAttribute('data-conversation-scroll', '')
-Object.defineProperties(scrollport, {
-  clientHeight: { value: 800, configurable: true },
-  clientWidth: { value: 1280, configurable: true },
-  scrollTop: { value: 0, writable: true, configurable: true },
-  getBoundingClientRect: {
-    value: () => ({ left: 0, top: 0, right: 1280, bottom: 800, width: 1280, height: 800 }),
-    configurable: true,
-  },
-})
-scrollport.scrollTo = options => { scrollport.scrollTop = typeof options === 'number' ? options : (options?.top ?? 0) }
-
+const root = document.createElement('main')
+const scroll = document.createElement('div')
+scroll.dataset.conversationScroll = ''
+const local = document.createElement('div')
 const flow = document.createElement('div')
-flow.setAttribute('data-chat-flow', '')
-Object.defineProperty(flow, 'getBoundingClientRect', {
-  value: () => ({ left: 300, top: -scrollport.scrollTop, right: 1048, bottom: 1600 - scrollport.scrollTop, width: 748, height: 1600 }),
-  configurable: true,
-})
-
-const keys = ['user:1', 'assistant:2', 'tool:3', 'assistant:3b', 'command:4', 'partial:5', 'tail:6']
-const contentTops = [40, 260, 700, 900, 1100, 1200, 1280]
-const appendRow = index => {
-  const row = document.createElement('div')
-  row.dataset.chatAnchorKey = keys[index]
-  row.dataset.chatTurn = String(nodeMap.get(keys[index])?.data.turn ?? 1)
-  Object.defineProperty(row, 'getBoundingClientRect', {
-    value: () => ({ left: 300, top: contentTops[index] - scrollport.scrollTop, right: 1048, bottom: contentTops[index] + 160 - scrollport.scrollTop, width: 748, height: 160 }),
-    configurable: true,
-  })
-  flow.appendChild(row)
+flow.dataset.chatFlow = ''
+const native = document.createElement('nav')
+native.setAttribute('aria-label', 'Turn navigation')
+local.append(native, flow); scroll.append(local); root.append(scroll); document.body.append(root)
+const rect = (left, top, width, height) => ({ left, top, width, height, right: left + width, bottom: top + height })
+Object.defineProperties(root, { clientWidth: { value: 1280, configurable: true }, clientHeight: { value: 900 }, getBoundingClientRect: { value: () => rect(0, 0, 1280, 900) } })
+Object.defineProperties(scroll, { clientHeight: { value: 800 }, getBoundingClientRect: { value: () => rect(0, 0, 1280, 800) } })
+flow.getBoundingClientRect = () => rect(300, -scroll.scrollTop, 748, 3000)
+const loaded = new Set([8, 9, 10])
+const map = new Map()
+const sources = new Map()
+const nodeStore = {
+  get: key => map.get(key),
+  source: key => { if (!sources.has(key)) sources.set(key, observable(null)); return sources.get(key) },
 }
-root.appendChild(scrollport)
-// A sibling navigation fixture detects unintended DOM takeover, not the real
-// official Navigator's scroll restoration (that requires a host browser test).
-const officialNav = document.createElement('nav')
-officialNav.setAttribute('aria-label', 'Official Turn navigation fixture')
-const officialButton = document.createElement('button')
-officialButton.textContent = 'Turn 1'
-officialNav.appendChild(officialButton)
-scrollport.append(officialNav, flow)
-const officialHtml = officialNav.outerHTML
-let officialClicks = 0
-officialButton.addEventListener('click', () => { officialClicks += 1 })
-document.body.appendChild(root)
-
-const nodeMap = new Map([
-  ['user:1', {
-    key: 'user:1', kind: 'user', anchorSeq: 1,
-    data: { content: [{ type: 'text', text: '修复右侧卡片截断问题\n已按照容器实际宽度重新计算列数。' }] },
-  }],
-  ['assistant:2', {
-    key: 'assistant:2', kind: 'assistant-step', anchorSeq: 2,
-    data: { turn: 1, step: 0, blocks: [{ kind: 'text', text: '第二个对话节点\n这里是助手回复的正文预览。' }] },
-  }],
-  ['tool:3', {
-    key: 'tool:3', kind: 'tool-call', anchorSeq: 3,
-    data: { root: { name: 'read_file', argsRaw: '{"path":"a.txt"}', content: [{ type: 'text', text: '工具结果' }] } },
-  }],
-  ['assistant:3b', {
-    key: 'assistant:3b', kind: 'assistant-step', anchorSeq: 3.5,
-    data: { turn: 1, step: 1, blocks: [{ kind: 'text', text: '工具执行后的助手结论' }] },
-  }],
-  ['command:4', {
-    key: 'command:4', kind: 'command', anchorSeq: 4,
-    data: { name: 'compact', args: null },
-  }],
-  ['partial:5', {
-    key: 'partial:5', kind: 'partial', anchorSeq: 5,
-    data: { turn: 1, step: 1, blocks: [{ kind: 'text', text: '流式中间状态' }] },
-  }],
-  ['tail:6', {
-    key: 'tail:6', kind: 'turn-tail', anchorSeq: 6,
-    data: { turn: 1, closing: null },
-  }],
-])
-keys.forEach((_, index) => appendRow(index))
-const nodeSources = new Map()
-const nodeSubscribers = new Map()
-const snapshot = { chat: { order: [...keys], nodes: {
-  get: key => nodeMap.get(key),
-  source: key => {
-    if (!nodeSources.has(key)) {
-      const listeners = new Set()
-      nodeSubscribers.set(key, listeners)
-      nodeSources.set(key, {
-        getSnapshot: () => nodeMap.get(key),
-        subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) },
-      })
+const chat = observable(undefined)
+const outline = observable(Array.from({ length: 10 }, (_, i) => ({ turn: i + 1, seq: (i + 1) * 100, prompt: `Question ${i + 1}`, response: `Response ${i + 1}` })))
+const sessionState = observable({ loadingOlder: false })
+let pending = null
+const requests = []
+const clicks = []
+const nativeButton = turn => [...native.querySelectorAll('button')].find(b => b.dataset.testTurn === String(turn))
+function refresh() {
+  flow.replaceChildren()
+  native.replaceChildren()
+  map.clear()
+  const order = []
+  const navigation = []
+  for (let turn = 1; turn <= 10; turn++) {
+    const button = document.createElement('button')
+    button.dataset.testTurn = String(turn)
+    button.setAttribute('aria-label', `${loaded.has(turn) ? 'Jump' : 'Load'} ${turn}`)
+    button.setAttribute('aria-busy', String(pending === turn))
+    button.onclick = () => {
+      clicks.push(turn)
+      if (!loaded.has(turn)) {
+        pending = turn; requests.push(turn)
+        sessionState.set({ loadingOlder: true })
+      } else { pending = null; sessionState.set({ loadingOlder: false }) }
+      for (const b of native.querySelectorAll('button')) b.setAttribute('aria-busy', String(b.dataset.testTurn === String(pending)))
     }
-    return nodeSources.get(key)
-  },
-} } }
-let snapshotSubscriber = () => {}
-let targetSubscriptions = 0
-const chatTarget = {
-  getSnapshot: () => snapshot.chat,
-  subscribe: fn => {
-    targetSubscriptions += 1
-    snapshotSubscriber = fn
-    return () => { targetSubscriptions -= 1; snapshotSubscriber = () => {} }
-  },
-}
-const session = {
-  getSnapshot: () => { throw new Error('Piano must not read Chat from the Session snapshot') },
-  subscribe: () => { throw new Error('Piano must subscribe to the Chat target, not Session') },
-}
-let sessionBinding = { session }
-let currentSession = 's1'
-let listSubscriber = () => {}
-let settingsSnapshot = {
-  status: 'ready', writable: true, revision: 1,
-  value: { language: 'zh', enabled: true, keyHeight: 2, keyGap: 12, maxVisible: 20 },
-}
-const settingsSubscribers = new Set()
-const publishSettings = (field, value) => {
-  settingsSnapshot = {
-    ...settingsSnapshot,
-    revision: settingsSnapshot.revision + 1,
-    value: { ...settingsSnapshot.value, [field]: value },
+    native.append(button)
+    if (!loaded.has(turn)) continue
+    navigation.push({ turn, anchorKey: `u${turn}`, prompt: `Question ${turn}`, response: `Response ${turn}` })
+    for (const role of ['u', 'a']) {
+      const key = `${role}${turn}`
+      const node = { key, kind: role === 'u' ? 'user' : 'assistant-step', target: 'chat', visibility: 'visible', location: { turn }, anchorSeq: turn * 100,
+        data: role === 'u' ? { content: [{ type: 'text', text: `Question ${turn}` }] } : { turn, blocks: [{ kind: 'text', text: `Answer ${turn}` }] } }
+      map.set(key, node); order.push(key)
+      const row = document.createElement('div'); row.dataset.chatAnchorKey = key; row.dataset.chatTurn = String(turn)
+      row.getBoundingClientRect = () => rect(300, (turn - 1) * 220 + (role === 'a' ? 100 : 0) - scroll.scrollTop, 748, 90)
+      flow.append(row)
+    }
   }
-  for (const subscriber of settingsSubscribers) subscriber()
+  chat.set({ order, nodes: nodeStore, navigation: { items: () => navigation } })
 }
-const settingsScope = {
-  getSnapshot: () => settingsSnapshot,
-  subscribe: fn => { settingsSubscribers.add(fn); return () => { settingsSubscribers.delete(fn) } },
-  set: async (field, value) => { publishSettings(field, value) },
-  unset: async field => {
-    const defaults = { language: 'zh', enabled: true, keyHeight: 2, keyGap: 12, maxVisible: 20 }
-    publishSettings(field, defaults[field])
-  },
-}
-let settingsSection
+refresh()
+const session = Object.assign({}, sessionState, { sessionId: 's1', projections: { faceOf: key => { assert.equal(key, 'turnOutline'); return outline } },
+  loadThrough() { throw new Error('Piano must delegate to the native button, not start a second pager') } })
+let binding = { session }
+const selection = observable({ current: 's1' })
+const settings = observable({ value: { enabled: true, language: 'zh', keyHeight: 2, keyGap: 12, maxVisible: 20 }, writable: true })
+const set = async (key, value) => { settings.set({ ...settings.getSnapshot(), value: { ...settings.getSnapshot().value, [key]: value } }); await frame() }
+const disposers = []
+const nativeTranslate = (key, args) => key === 'chat.turnNavigation.label' ? 'Turn navigation'
+  : key === 'chat.turnNavigation.jumpLoad' ? `Load ${args.turn}` : key === 'chat.turnNavigation.jump' ? `Jump ${args.turn}` : key
 const ctx = {
-  effect: fn => { const disposer = fn(); globalThis.__disposers.push(disposer); return disposer },
-  locale: { register: () => {}, bind: () => key => key },
-  sessions: {
-    list: {
-      getSnapshot: () => ({ current: currentSession }),
-      subscribe: fn => { listSubscriber = fn; return () => { listSubscriber = () => {} } },
-    },
-    binding: id => id === 's1' ? sessionBinding : undefined,
-  },
-  uiConversation: {
-    binding: binding => {
-      assert.equal(binding, sessionBinding)
-      return { target: name => { assert.equal(name, 'chat'); return chatTarget } }
-    },
-  },
-  settingsScope: {
-    bind: spec => {
-      assert.equal(spec.namespace, 'sm-context-piano')
-      return settingsScope
-    },
-  },
-  slots: {
-    inject: (name, callback) => {
-      assert.equal(name, 'settings.section')
-      callback()
-    },
-    register: (options, component) => {
-      settingsSection = { options, component }
-      return () => { settingsSection = undefined }
-    },
-  },
+  effect: fn => { const stop = fn(); disposers.push(stop); return stop },
+  locale: { register: () => () => {}, bind: ns => ns === 'chat' ? nativeTranslate : key => key },
+  sessions: { list: selection, binding: id => id === 's1' ? binding : undefined },
+  uiConversation: { binding: b => { assert.equal(b, binding); return { target: key => { assert.equal(key, 'chat'); return chat } } } },
+  settingsScope: { bind: () => settings },
+  slots: { inject: (_, fn) => fn(), register: () => () => {} },
 }
-globalThis.__disposers = []
-
-window.__ModuleLoader__ = { load: handoff => { globalThis.__handoff = handoff } }
+window.__ModuleLoader__ = { load: handoff => { globalThis.handoff = handoff } }
 await import('../lib/client.js')
-const exports = globalThis.__handoff.factory(spec => {
-  if (spec === 'react') return requireHere('react')
-  if (spec === 'react/jsx-runtime') return requireHere('react/jsx-runtime')
-  throw new Error(`unexpected require: ${spec}`)
-})
+const plugin = globalThis.handoff.factory(spec => require(spec))
+plugin.apply(ctx)
+await frame()
+let passed = 0
+async function check(name, run) { await run(); passed++; console.log(`ok ${passed} - ${name}`) }
+const piano = () => document.querySelector('.smcp-unified')
+const key = id => [...document.querySelectorAll('.smcp-bar')].find(b => b.dataset.key === id)
+const press = async k => { piano().dispatchEvent(new window.KeyboardEvent('keydown', { key: k, bubbles: true })); await frame() }
 
-await check('mounts only user messages and visible assistant output runs', async () => {
-  exports.apply(ctx)
-  await waitFrame()
-  const strip = document.querySelector('.smcp-strip')
-  assert.ok(strip)
-  assert.equal(document.querySelectorAll('.smcp-bar').length, 3)
-  assert.equal([...document.querySelectorAll('.smcp-bar')].filter(bar => !bar.hidden).length, 3)
-  assert.equal(document.querySelector('[data-key="tool:3"]'), null)
-  assert.equal(document.querySelector('[data-key="command:4"]'), null)
-  assert.equal(document.querySelector('[data-key="partial:5"]'), null)
-  assert.equal(strip.getAttribute('role'), 'navigation')
-  assert.equal(Number.parseFloat(strip.style.height), 230)
-  assert.equal(globalThis.__smcpDebug.hiddenReason, null)
+await check('exactly one visible and accessible rail; native component stays mounted', () => {
+  assert.equal(piano().hidden, false)
+  assert.equal(native.style.getPropertyValue('display'), 'none')
+  assert.equal(native.getAttribute('aria-hidden'), 'true')
+  assert.equal(native.querySelectorAll('button').length, 10)
 })
-
-await check('registers the first-level settings page directly after Agent Presets', async () => {
-  assert.equal(settingsSection.options.id, 'sm-context-piano')
-  assert.equal(settingsSection.options.order, 21)
-  assert.equal(settingsSection.options.label(), 'settings.nav')
-  assert.equal(settingsSection.options.inject().scope, settingsScope)
-  const React = requireHere('react')
-  const { act } = React
-  const { createRoot } = requireHere('react-dom/client')
-  const mount = document.createElement('div')
-  document.body.appendChild(mount)
-  const rootView = createRoot(mount)
-  let copiedCommand = ''
-  Object.defineProperty(window.navigator, 'clipboard', {
-    configurable: true,
-    value: { writeText: async text => { copiedCommand = text } },
-  })
-  await act(async () => {
-    rootView.render(React.createElement(settingsSection.component, {
-      ...settingsSection.options.inject(), close: () => {}, t: key => key,
-    }))
-    await waitFrame()
-  })
-  assert.match(mount.textContent, /sm-context-piano/)
-  assert.match(mount.textContent, /v1\.2\.0/)
-  assert.match(mount.textContent, /2026-09-02/)
-  assert.match(mount.textContent, /Jack·Huang/)
-  assert.match(mount.textContent, /dsh plugin --profile web add @hjj345345\/dsh-sm-context-piano/)
-  assert.match(mount.textContent, /230px/)
-  assert.match(mount.textContent, /通用设置/)
-  assert.match(mount.textContent, /显示设置/)
-  assert.match(mount.textContent, /关于插件/)
-  assert.match(mount.textContent, /v1\.2\.0/)
-  assert.match(mount.querySelector('.smcp-settings-icon').getAttribute('src'), /^data:image\/png;base64,/)
-  const languageSelect = mount.querySelector('.smcp-settings-select')
-  assert.equal(languageSelect.value, 'zh')
-  assert.deepEqual([...languageSelect.options].map(option => option.textContent), ['简体中文', 'English', '繁體中文'])
-  const commandBox = mount.querySelector('.smcp-settings-command-box')
-  const installCard = commandBox.closest('.smcp-settings-install')
-  assert.equal(mount.querySelectorAll('.smcp-settings-card').length, 4)
-  assert.ok(installCard)
-  assert.equal(installCard.querySelector('h2').textContent, '安装命令')
-  assert.equal(commandBox.closest('.smcp-settings-about'), null)
-  const aboutRows = [...mount.querySelectorAll('.smcp-settings-about dl > div')]
-    .map(row => [row.querySelector('dt').textContent, row.querySelector('dd').textContent])
-  assert.deepEqual(aboutRows.at(-2), ['GitHub', 'https://github.com/hjj345/dsh-sm-context-piano'])
-  assert.deepEqual(aboutRows.at(-1), ['npm', '@hjj345345/dsh-sm-context-piano'])
-  const githubLink = mount.querySelector('.smcp-settings-about a[href^="https://github.com/"]')
-  assert.equal(githubLink.href, 'https://github.com/hjj345/dsh-sm-context-piano')
-  assert.equal(githubLink.target, '_blank')
-  assert.equal(githubLink.rel, 'noreferrer')
-  const npmLink = mount.querySelector('.smcp-settings-about a[href^="https://www.npmjs.com/package/"]')
-  assert.equal(npmLink.textContent, '@hjj345345/dsh-sm-context-piano')
-  assert.equal(npmLink.href, 'https://www.npmjs.com/package/@hjj345345/dsh-sm-context-piano')
-  assert.equal(npmLink.target, '_blank')
-  assert.equal(npmLink.rel, 'noreferrer')
-  await act(async () => {
-    languageSelect.value = 'en'
-    languageSelect.dispatchEvent(new window.Event('change', { bubbles: true }))
-    await Promise.resolve()
-  })
-  assert.equal(settingsSnapshot.value.language, 'en')
-  assert.match(mount.textContent, /General settings/)
-  assert.match(mount.textContent, /Display/)
-  assert.match(mount.textContent, /About/)
-  assert.match(mount.textContent, /Install command/)
-  assert.equal(settingsSection.options.label(), 'settings.nav')
-  assert.equal(document.querySelector('.smcp-strip').getAttribute('aria-label'), 'nav.aria')
-  await act(async () => {
-    languageSelect.value = 'zh-TW'
-    languageSelect.dispatchEvent(new window.Event('change', { bubbles: true }))
-    await Promise.resolve()
-  })
-  assert.equal(settingsSnapshot.value.language, 'zh-TW')
-  assert.match(mount.textContent, /通用設定/)
-  assert.match(mount.textContent, /顯示設定/)
-  assert.match(mount.textContent, /關於外掛/)
-  assert.match(mount.textContent, /安裝命令/)
-  assert.equal(settingsSection.options.label(), 'settings.nav')
-  assert.equal(document.querySelector('.smcp-strip').getAttribute('aria-label'), 'nav.aria')
-  await act(async () => { mount.querySelector('.smcp-settings-reset').click(); await waitFrame() })
-  assert.equal(settingsSnapshot.value.language, 'zh')
-  assert.match(mount.textContent, /显示设置/)
-  await act(async () => { commandBox.querySelector('button').click(); await Promise.resolve() })
-  assert.equal(copiedCommand, 'dsh plugin --profile web add @hjj345345/dsh-sm-context-piano')
-  assert.equal(mount.querySelector('.smcp-settings-command-box button').textContent, '已复制')
-  const styles = document.querySelector('#smcp-panel-styles').textContent
-  assert.match(styles, /grid-template-columns: minmax\(0, 1fr\) auto/)
-  assert.match(styles, /white-space: pre-wrap/)
-  assert.match(styles, /background: #f3f3f4/)
-  assert.match(styles, /\.smcp-settings-select[\s\S]*border-radius: 9px/)
-  assert.match(styles, /\.smcp-settings-reset[\s\S]*background: #161719[\s\S]*color: #fff/)
-  assert.match(styles, /\.smcp-settings-command-box button[\s\S]*background: #161719[\s\S]*color: #fff/)
-  assert.match(styles, /body\[data-ds-dark-theme\] \.smcp-settings-command-box[\s\S]*background: rgba\(255, 255, 255, \.08\)/)
-  assert.match(styles, /body\[data-ds-dark-theme\] \.smcp-settings-command-box code[\s\S]*color: #f1f1f3/)
-  assert.match(styles, /@media \(max-width: 520px\)/)
-  assert.match(styles, /@media \(max-width: 360px\)/)
-  await act(async () => { rootView.unmount() })
-  mount.remove()
+await check('unloaded Turns appear without creating fake assistant segments', () => {
+  assert.equal(globalThis.__smcpDebug.total, 13)
+  assert.equal(key('turn:1').dataset.unloaded, 'true')
+  assert.equal(key('segment:a1::output:0'), undefined)
 })
-
-await check('live settings resize, limit, disable, and restore the rail', async () => {
-  await settingsScope.set('keyHeight', 4)
-  await settingsScope.set('keyGap', 8)
-  await settingsScope.set('maxVisible', 5)
-  await waitFrame()
-  let strip = document.querySelector('.smcp-strip')
-  assert.equal(Number.parseFloat(strip.style.height), 36)
-  assert.ok([...document.querySelectorAll('.smcp-bar')].every(bar => Number.parseFloat(bar.style.height) === 4))
-  await settingsScope.set('enabled', false)
-  await waitFrame()
-  assert.equal(document.querySelector('.smcp-strip'), null)
-  assert.equal(targetSubscriptions, 0)
-  assert.ok([...nodeSubscribers.values()].every(listeners => listeners.size === 0))
-  await settingsScope.set('enabled', true)
-  await settingsScope.set('keyHeight', 2)
-  await settingsScope.set('keyGap', 12)
-  await settingsScope.set('maxVisible', 20)
-  await waitFrame()
-  await waitFrame()
-  strip = document.querySelector('.smcp-strip')
-  assert.ok(strip)
-  assert.equal(Number.parseFloat(strip.style.height), 230)
-  assert.equal(targetSubscriptions, 1)
+await check('full-history Home/End keys work independently of maxVisible', async () => {
+  await set('maxVisible', 5)
+  await press('End')
+  assert.ok(globalThis.__smcpDebug.windowStart > 0)
+  assert.ok(document.querySelectorAll('.smcp-bar').length <= 5)
+  await press('Home')
+  assert.ok(key('turn:1'))
 })
-
-await check('keeps a compact fixed-pitch stack centered in the rail', () => {
-  const strip = document.querySelector('.smcp-strip')
-  const bars = [...document.querySelectorAll('.smcp-bar')].filter(bar => !bar.hidden)
-  assert.ok(bars.every(bar => Number.parseFloat(bar.style.height) === 2))
-  const centers = bars.map(bar => Number.parseFloat(bar.style.top) + Number.parseFloat(bar.style.height) / 2)
-  assert.equal(centers[1] - centers[0], 12)
-  assert.equal(centers[2] - centers[1], 12)
-  assert.equal((centers[0] + centers[2]) / 2, Number.parseFloat(strip.style.height) / 2)
+await check('unloaded activation delegates once and shows native busy state', async () => {
+  await press('Enter')
+  assert.deepEqual(requests, [1])
+  assert.equal(key('turn:1').getAttribute('aria-busy'), 'true')
+  assert.match(document.querySelector('[role="status"]').textContent, /正在加载第 1 轮/)
 })
-
-await check('the full rail continuously drives the hover wave and preview', async () => {
-  const strip = document.querySelector('.smcp-strip')
-  const railHeight = Number.parseFloat(strip.style.height)
-  Object.defineProperty(strip, 'getBoundingClientRect', {
-    value: () => ({ left: 192, top: 250, right: 250, bottom: 250 + railHeight, width: 58, height: railHeight }),
-    configurable: true,
-  })
-  const bars = [...document.querySelectorAll('.smcp-bar')]
-  const secondY = Number.parseFloat(bars[1].style.top) + Number.parseFloat(bars[1].style.height) / 2
-  strip.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 250 + secondY, bubbles: true }))
-  await waitFrame()
-  assert.ok(bars[1].classList.contains('smcp-bar-hover'))
-  assert.ok(Number.parseFloat(bars[1].style.width) > Number.parseFloat(bars[0].style.width))
-  const tooltip = document.querySelector('.smcp-tooltip')
-  assert.ok(tooltip.classList.contains('smcp-tooltip-visible'))
-  const title = tooltip.querySelector('.smcp-tooltip-title')
-  assert.equal(title.tagName, 'DIV')
-  assert.equal(window.getComputedStyle(title).fontWeight, '400')
-  assert.match(tooltip.textContent, /第二个对话节点/)
-  assert.doesNotMatch(tooltip.textContent, /token|工具|read_file|assistant/i)
+await check('new target supersedes old intent without a second plugin pager', async () => {
+  await press('ArrowDown'); await press('Enter')
+  assert.equal(pending, 2)
+  assert.deepEqual(requests, [1, 2])
 })
-
-await check('clicking the rail jumps to the currently previewed node', () => {
-  const strip = document.querySelector('.smcp-strip')
-  strip.dispatchEvent(new window.MouseEvent('click', { clientY: 342, bubbles: true }))
-  assert.equal(scrollport.scrollTop, contentTops[1] - 16)
+await check('Escape delegates cancellation and preserves current reader position', async () => {
+  const top = scroll.scrollTop
+  await press('Escape')
+  assert.equal(pending, null)
+  assert.equal(scroll.scrollTop, top)
 })
-
-await check('scroll updates active color and length immediately', async () => {
-  const strip = document.querySelector('.smcp-strip')
-  strip.dispatchEvent(new window.MouseEvent('pointerleave'))
-  scrollport.scrollTop = 320
-  scrollport.dispatchEvent(new window.Event('scroll'))
-  await waitFrame()
-  const bars = [...document.querySelectorAll('.smcp-bar')]
-  assert.ok(bars[1].classList.contains('smcp-bar-current'))
-  assert.equal(Number.parseFloat(bars[1].style.width), 24)
-  assert.equal(Number.parseFloat(bars[0].style.width), 10)
+await check('materialization preserves the stable Turn entry and adds genuine segments', async () => {
+  await press('Home'); await press('Enter')
+  const previous = key('turn:1')
+  loaded.add(1); pending = null; refresh(); sessionState.set({ loadingOlder: false })
+  await frame()
+  await press('Home')
+  assert.equal(key('turn:1'), previous)
+  assert.equal(key('turn:1').dataset.unloaded, 'false')
+  assert.ok(key('segment:a1::output:0'))
 })
-
-await check('snapshot updates retain existing marker elements', async () => {
-  const first = document.querySelector('[data-key="user:1"]')
-  keys.push('assistant:7')
-  contentTops.push(1420)
-  nodeMap.set('assistant:7', {
-    key: 'assistant:7', kind: 'assistant-step', anchorSeq: 7,
-    data: { turn: 2, step: 0, blocks: [{ kind: 'text', text: '新增回复' }] },
-  })
-  snapshot.chat.order.push('assistant:7')
-  appendRow(7)
-  snapshotSubscriber()
-  await waitFrame()
-  assert.equal(document.querySelectorAll('.smcp-bar').length, 4)
-  assert.equal(document.querySelector('[data-key="user:1"]'), first)
+await check('failed load remains selectable and reports retry, not false success', async () => {
+  await press('Home'); await press('ArrowDown'); await press('ArrowDown'); await press('Enter')
+  assert.equal(pending, 2)
+  pending = null; refresh(); sessionState.set({ loadingOlder: false }); await frame()
+  assert.match(document.querySelector('[role="status"]').textContent, /第 2 轮未加载/)
+  await press('Home'); await press('ArrowDown'); await press('ArrowDown'); await press('Enter')
+  assert.equal(pending, 2)
+  await press('Escape')
 })
-
-await check('an open preview follows keyed-only streaming descriptor updates', async () => {
-  const strip = document.querySelector('.smcp-strip')
-  const last = document.querySelector('[data-key="assistant:7::output:0"]')
-  const y = Number.parseFloat(last.style.top) + Number.parseFloat(last.style.height) / 2
-  strip.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 250 + y, bubbles: true }))
-  await waitFrame()
-  nodeMap.set('assistant:7', {
-    key: 'assistant:7', kind: 'assistant-step', anchorSeq: 7,
-    data: { turn: 2, step: 0, blocks: [{ kind: 'text', text: '流式更新后的回复\n预览必须同步刷新。' }] },
-  })
-  for (const notify of nodeSubscribers.get('assistant:7')) notify()
-  await waitFrame()
-  assert.match(document.querySelector('.smcp-tooltip').textContent, /流式更新后的回复/)
+await check('rail wheel reveals older/later entries without scrolling the transcript', async () => {
+  await press('Home')
+  const top = scroll.scrollTop
+  piano().dispatchEvent(new window.WheelEvent('wheel', { deltaY: 300, bubbles: true, cancelable: true }))
+  await frame()
+  assert.ok(globalThis.__smcpDebug.windowStart > 0)
+  assert.equal(scroll.scrollTop, top)
 })
-
-await check('keyboard navigation previews and activates a marker', async () => {
-  const strip = document.querySelector('.smcp-strip')
-  strip.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'End', bubbles: true }))
-  strip.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await waitFrame()
-  assert.equal(scrollport.scrollTop, contentTops[7] - 16)
+await check('reader wheel cancels a pending native landing', async () => {
+  await press('Home'); await press('ArrowDown'); await press('ArrowDown'); await press('Enter')
+  assert.equal(pending, 2)
+  scroll.dispatchEvent(new window.WheelEvent('wheel', { deltaY: 100 })); await frame()
+  assert.equal(pending, null)
 })
-
-await check('hidden row changes and reduced-motion jumps respect the current DOM', async () => {
-  const row = flow.querySelector('[data-chat-anchor-key="user:1"]')
-  row.hidden = true
-  await waitFrame()
-  assert.equal(document.querySelector('[data-key="user:1"]').hidden, true)
-  row.hidden = false
-  await waitFrame()
-  const originalScrollTo = scrollport.scrollTo
-  let received
-  scrollport.scrollTo = options => { received = options; originalScrollTo(options) }
-  window.matchMedia = () => ({ matches: true })
-  const oldTop = contentTops[0]
-  contentTops[0] = oldTop + 30
-  document.querySelector('[data-key="user:1"]').click()
-  assert.equal(received.top, contentTops[0] - 16)
-  assert.equal(received.behavior, 'auto')
-  contentTops[0] = oldTop
-  window.matchMedia = () => ({ matches: false })
-  scrollport.scrollTo = originalScrollTo
+await check('keyed-only streaming refreshes visible text', async () => {
+  await press('Home'); await press('ArrowDown')
+  map.get('a1').data.blocks[0].text = 'fresh stream'
+  sources.get('a1').emit(); await frame()
+  assert.match(document.querySelector('.smcp-tooltip').textContent, /fresh stream/)
 })
-
-await check('sibling official navigation fixture remains untouched and interactive', () => {
-  assert.equal(officialNav.outerHTML, officialHtml)
-  assert.equal(officialNav.parentElement, scrollport)
-  officialButton.click()
-  assert.equal(officialClicks, 1)
+await check('contract drift restores official UI and hides Piano, never both', async () => {
+  nativeButton(3).setAttribute('aria-label', 'changed-contract'); await frame()
+  assert.equal(piano().hidden, true)
+  assert.equal(native.style.display, '')
+  assert.equal(native.hasAttribute('aria-hidden'), false)
+  refresh(); await frame()
+  assert.equal(piano().hidden, false)
 })
-
-await check('same-ID binding replacement releases old subscriptions and rebinds once', async () => {
-  sessionBinding = { session }
-  listSubscriber()
-  await waitFrame()
-  assert.equal(targetSubscriptions, 1)
-  assert.equal(globalThis.__smcpDebug.sessionId, 's1')
-  assert.equal(document.querySelectorAll('.smcp-bar').length, 4)
-  assert.ok([...nodeSubscribers.values()].every(listeners => listeners.size <= 1))
-})
-
-await check('shows at most 20 keys and recenters after selecting the top boundary', async () => {
-  flow.textContent = ''
-  keys.splice(0)
-  contentTops.splice(0)
-  nodeMap.clear()
-  snapshot.chat.order.splice(0)
-  for (let index = 0; index < 25; index += 1) {
-    const key = `user:window:${index}`
-    keys.push(key)
-    contentTops.push(index * 100)
-    nodeMap.set(key, {
-      key, kind: 'user', anchorSeq: 100 + index,
-      data: { content: [{ type: 'text', text: `用户节点 ${index}` }] },
-    })
-    snapshot.chat.order.push(key)
-    appendRow(index)
-  }
-  scrollport.scrollTop = 1200
-  snapshotSubscriber()
-  await waitFrame()
-  await waitFrame()
-  assert.equal(globalThis.__smcpDebug.total, 25)
-  assert.equal(globalThis.__smcpDebug.bars, 20)
-  assert.equal(globalThis.__smcpDebug.windowStart, 3)
-  assert.equal(document.querySelector('[data-key="user:window:2"]').hidden, true)
-  assert.equal(document.querySelector('[data-key="user:window:3"]').hidden, false)
-  const strip = document.querySelector('.smcp-strip')
-  const top = document.querySelector('[data-key="user:window:3"]')
-  const topY = Number.parseFloat(top.style.top) + Number.parseFloat(top.style.height) / 2
-  strip.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 250 + topY, bubbles: true }))
-  await waitFrame()
-  strip.dispatchEvent(new window.MouseEvent('click', { clientY: 250 + topY, bubbles: true }))
-  await waitFrame()
-  assert.equal(globalThis.__smcpDebug.windowStart, 0)
-  assert.equal(document.querySelector('[data-key="user:window:0"]').hidden, false)
-})
-
-await check('a single rendered node stays centered on the rail', async () => {
-  flow.textContent = ''
-  keys.splice(0, keys.length, 'user:solo')
-  contentTops.splice(0, contentTops.length, 80)
-  nodeMap.clear()
-  nodeMap.set('user:solo', {
-    key: 'user:solo', kind: 'user', anchorSeq: 999,
-    data: { content: [{ type: 'text', text: '单节点' }] },
-  })
-  snapshot.chat.order.splice(0, snapshot.chat.order.length, 'user:solo')
-  appendRow(0)
-  scrollport.scrollTop = 0
-  snapshotSubscriber()
-  await waitFrame()
-  const strip = document.querySelector('.smcp-strip')
-  const bar = document.querySelector('.smcp-bar')
-  const center = Number.parseFloat(bar.style.top) + Number.parseFloat(bar.style.height) / 2
-  assert.ok(Math.abs(center - Number.parseFloat(strip.style.height) / 2) < 0.2)
-})
-
-await check('narrow containers hide the Piano without hiding official navigation', async () => {
+await check('narrow-container fallback restores native ownership', async () => {
   Object.defineProperty(root, 'clientWidth', { value: 500, configurable: true })
-  window.dispatchEvent(new window.Event('resize'))
-  await waitFrame()
-  assert.equal(globalThis.__smcpDebug.hiddenReason, 'narrow')
-  assert.equal(officialNav.outerHTML, officialHtml)
+  chat.emit(); await frame()
+  assert.equal(piano().hidden, true)
+  assert.equal(native.style.display, '')
   Object.defineProperty(root, 'clientWidth', { value: 1280, configurable: true })
-  window.dispatchEvent(new window.Event('resize'))
-  await waitFrame()
+  chat.emit(); await frame()
 })
-
-await check('session disappearance clears markers without stale content', async () => {
-  const oldNotify = snapshotSubscriber
-  currentSession = undefined
-  listSubscriber()
-  oldNotify()
-  await waitFrame()
-  assert.equal(document.querySelectorAll('.smcp-bar').length, 0)
-  assert.equal(globalThis.__smcpDebug.sessionId, undefined)
-  assert.equal(targetSubscriptions, 0)
-  assert.ok([...nodeSubscribers.values()].every(listeners => listeners.size === 0))
+await check('disable restores native visibility and releases all subscriptions', async () => {
+  await set('enabled', false)
+  assert.equal(piano(), null)
+  assert.equal(native.style.display, '')
+  assert.equal(chat.listeners.size, 0)
+  assert.equal(outline.listeners.size, 0)
+  for (const source of sources.values()) assert.equal(source.listeners.size, 0)
+  await set('enabled', true)
 })
-
-await check('dispose removes every injected runtime surface', () => {
-  for (const disposer of globalThis.__disposers) if (typeof disposer === 'function') disposer()
-  assert.equal(document.querySelector('.smcp-strip'), null)
+await check('same-ID binding replacement rebinds exactly once', async () => {
+  binding = { session }; selection.emit(); await frame()
+  assert.equal(chat.listeners.size, 1)
+  assert.equal(outline.listeners.size, 1)
+})
+await check('session disappearance cannot publish stale content', async () => {
+  selection.set({ current: undefined }); chat.emit(); await frame()
+  assert.equal(piano().hidden, true)
+  assert.equal(native.style.display, '')
+  assert.equal(chat.listeners.size, 0)
+})
+await check('dispose removes Piano and preserves native navigation', () => {
+  for (const dispose of disposers.reverse()) if (typeof dispose === 'function') dispose()
+  assert.equal(piano(), null)
   assert.equal(document.querySelector('.smcp-tooltip'), null)
-  assert.equal(globalThis.__smcpDebug, undefined)
-  assert.equal(officialNav.outerHTML, officialHtml)
+  assert.equal(native.isConnected, true)
+  assert.equal(native.style.display, '')
 })
-
-console.log(`\n${passed} integration checks passed, ${failed} failed`)
-process.exit(failed === 0 ? 0 : 1)
+console.log(`${passed} single-navigation integration checks passed`)
+dom.window.close()
