@@ -6,8 +6,8 @@ import { createRequire } from 'node:module'
 import { createServer } from 'node:http'
 import path from 'node:path'
 const tools = createRequire(path.resolve('.browser-tools/package.json'))
-const { build } = tools('esbuild')
-const { chromium } = tools('playwright')
+const local = createRequire(path.resolve('package.json'))
+const { build } = tools('esbuild'), { chromium } = tools('playwright')
 const pinned = 'c291e7961a515f6d7af9304e7fd1d257929aef26'
 const dir = path.resolve('.semantic-fixture')
 await mkdir(`${dir}/vendor`, { recursive: true }); await mkdir(`${dir}/contract`, { recursive: true }); await mkdir('test-results', { recursive: true })
@@ -33,10 +33,15 @@ await Promise.all(Object.entries(sources).map(async ([file, source]) => {
 await writeFile(`${dir}/helpers.ts`, 'export const SessionSeq = (value: number) => value; export default function clsx(...values: unknown[]): string { return values.flatMap(value => typeof value === "string" ? [value] : value && typeof value === "object" ? Object.entries(value).filter(([, yes]) => yes).map(([key]) => key) : []).join(" ") }')
 await build({
   entryPoints: ['scripts/semantic-browser-fixture.tsx'], outfile: `${dir}/fixture.js`, bundle: true, format: 'iife', platform: 'browser', jsx: 'automatic',
+  nodePaths: [path.resolve('.browser-tools/node_modules')],
   loader: { '.css': 'local-css' }, define: { 'process.env.NODE_ENV': '"development"' },
   plugins: [{ name: 'non-business-leaves', setup(b) {
     b.onResolve({ filter: /^(\.\/MessageItem\.tsx|\.\/message-chrome\.ts|\.\/icons\/index\.tsx|@deepseek-ai\/dsh-client-ui-primitives)$/ }, () => ({ path: path.resolve('scripts/semantic-browser-leaves.tsx') }))
     b.onResolve({ filter: /^(clsx|@deepseek-ai\/dsh-session\/types)$/ }, () => ({ path: `${dir}/helpers.ts` }))
+    // The published store imports host-provided libraries that are deliberately
+    // not plugin dependencies. Resolve the test-only copies explicitly.
+    b.onResolve({ filter: /^(zustand(?:\/.*)?|immer)$/ }, args => ({ path: tools.resolve(args.path) }))
+    b.onResolve({ filter: /^react(?:\/.*)?$/ }, args => ({ path: local.resolve(args.path) }))
   } }],
 })
 const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><style>
@@ -47,8 +52,7 @@ body[data-ds-dark-theme]{background:#15151b;color:#eee}body[data-ds-dark-theme] 
 const server = createServer(async (req, res) => {
   if (req.url === '/') { res.setHeader('Content-Type', 'text/html'); res.end(html); return }
   if (!['/fixture.js', '/fixture.css'].includes(req.url)) { res.writeHead(404); res.end(); return }
-  res.setHeader('Content-Type', req.url.endsWith('css') ? 'text/css' : 'application/javascript')
-  res.end(await readFile(dir + req.url))
+  res.setHeader('Content-Type', req.url.endsWith('css') ? 'text/css' : 'application/javascript'); res.end(await readFile(dir + req.url))
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const browser = await chromium.launch({ headless: true })
@@ -58,13 +62,9 @@ const page = await context.newPage()
 let errors = [], passed = 0
 page.on('pageerror', error => errors.push(error.message))
 const key = (kind, turn = 2) => page.locator(`.smcp-bar[data-kind="${kind}"][data-turn="${turn}"]`)
-const start = async () => {
-  errors = []; await page.goto(`http://127.0.0.1:${server.address().port}/`)
-  await page.waitForFunction(() => window.__smcpDebug?.mode === 'piano')
-}
+const start = async () => { errors = []; await page.goto(`http://127.0.0.1:${server.address().port}/`); await page.waitForFunction(() => window.__smcpDebug?.mode === 'piano') }
 const activate = async locator => {
-  const box = await locator.boundingBox(); assert.ok(box)
-  await page.mouse.click(box.x + 1, box.y + box.height / 2)
+  const box = await locator.boundingBox(); assert.ok(box); await page.mouse.click(box.x + 1, box.y + box.height / 2)
 }
 const colour = locator => locator.evaluate(el => getComputedStyle(el).backgroundColor)
 const rowTop = selector => page.locator(selector).evaluate(el => el.getBoundingClientRect().top - el.closest('[data-conversation-scroll]').getBoundingClientRect().top)
@@ -80,7 +80,7 @@ try {
     await page.waitForFunction(() => document.querySelectorAll('.smcp-bar[data-kind="output"]').length === 2)
     await activate(key('final', 1)); await page.waitForTimeout(100)
     assert.ok(Math.abs(await rowTop('[data-chat-anchor-key="f1"]') - 24) < 3)
-    assert.ok(!await key('final', 1).getAttribute('aria-label').then(text => text.includes('PROCESS_1')))
+    assert.ok(!(await key('final', 1).getAttribute('aria-label')).includes('PROCESS_1'))
   })
   await test('Compact mode exposes question/answer keys even while native process is folded', async () => {
     assert.equal(await page.locator('[data-chat-anchor-key="tool2"]').getAttribute('hidden'), 'until-found')
@@ -111,16 +111,14 @@ try {
     await page.screenshot({ path: 'test-results/semantic-keys-light.png', fullPage: true })
     await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', 'true'))
     const darkUser = await colour(user), darkAI = await colour(ai)
-    assert.notEqual(darkUser, darkAI)
-    assert.notEqual(darkUser, selectedUser)
+    assert.notEqual(darkUser, darkAI); assert.notEqual(darkUser, selectedUser)
     await page.screenshot({ path: 'test-results/semantic-keys-dark.png', fullPage: true })
   })
   await test('question answer preview preserves custom multi-select content and roles', async () => {
-    const answer = key('answer').last(); const box = await answer.boundingBox(); assert.ok(box)
+    const answer = key('answer').last(), box = await answer.boundingBox(); assert.ok(box)
     await page.mouse.move(box.x + 1, box.y + box.height / 2)
     await page.waitForFunction(() => document.querySelector('.smcp-tooltip')?.textContent.includes('Windows'))
-    assert.equal(await answer.getAttribute('data-role'), 'user')
-    assert.ok((await answer.getAttribute('aria-label')).includes('User · Answer'))
+    assert.equal(await answer.getAttribute('data-role'), 'user'); assert.ok((await answer.getAttribute('aria-label')).includes('User · Answer'))
   })
   await test('disabling during disclosure cancels pending local landing without submission', async () => {
     await key('question').first().evaluate(el => { el.click(); window.semanticFixture.disable() })
