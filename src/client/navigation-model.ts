@@ -64,11 +64,11 @@ export function buildPianoItems(
     list.push(segment)
     grouped.set(segment.turn, list)
   }
-  return turns.flatMap(turn => {
+  return turns.flatMap<PianoItem>(turn => {
     const children = turn.anchor.kind === 'loaded' ? grouped.get(turn.turn) ?? [] : []
     if (children.length === 0) return [{
       key: `turn:${turn.turn}`, turn: turn.turn, title: turn.prompt || label(turn.turn),
-      preview: turn.response, role: 'turn' as const,
+      preview: turn.response, role: 'turn',
       anchorKey: turn.anchor.kind === 'loaded' ? turn.anchor.key : null,
     }]
     return children.map((segment, index) => ({
