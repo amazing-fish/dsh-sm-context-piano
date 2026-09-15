@@ -10,6 +10,8 @@ import { buildNavigationNodes } from './keys.ts'
 import { buildPianoItems, mergeNavigationTurns } from './navigation-model.ts'
 import type { PianoItem } from './navigation-model.ts'
 import { createNativeNavigation } from './native-navigation.ts'
+import { createSemanticLanding } from './semantic-landing.ts'
+import { SEMANTIC_CSS, semanticLabel, landingFailure } from './semantic-style.ts'
 import type { SmContextPianoKey } from './locales.ts'
 import { DEFAULT_SETTINGS, DEFAULT_SETTINGS_SOURCE, railHeight } from '../core/config.ts'
 import type { PianoSettingsSource } from '../core/config.ts'
@@ -64,6 +66,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     navigation: () => nativeT('chat.turnNavigation.label'),
     jump: (turn, unloaded) => nativeT(unloaded ? 'chat.turnNavigation.jumpLoad' : 'chat.turnNavigation.jump', { turn }),
   })
+  const landing = createSemanticLanding(flow, owner)
   const prefix = `smcp-${++instanceCount}-`
   const strip = document.createElement('div')
   strip.className = 'smcp-strip smcp-unified'
@@ -75,18 +78,20 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   tooltip.className = 'smcp-tooltip'
   tooltip.id = `${prefix}preview`
   tooltip.setAttribute('role', 'tooltip')
+  const badge = document.createElement('span')
+  badge.className = 'smcp-key-label'
   const title = document.createElement('div')
   title.className = 'smcp-tooltip-title'
   const body = document.createElement('div')
   body.className = 'smcp-tooltip-body'
-  tooltip.append(title, body)
+  tooltip.append(badge, title, body)
   const status = document.createElement('div')
   status.className = 'smcp-navigation-status'
   status.setAttribute('role', 'status')
   status.setAttribute('aria-live', 'polite')
   strip.append(status)
   const style = document.createElement('style')
-  style.textContent = '.smcp-unified[hidden]{display:none!important}.smcp-unified .smcp-bar[aria-busy="true"]{opacity:.4}.smcp-unified .smcp-bar[data-unloaded="true"]{background:transparent;border:1px solid currentColor;box-sizing:border-box}.smcp-navigation-status{position:absolute;left:0;top:100%;width:220px;font-size:12px;line-height:1.4;padding-top:12px;color:var(--dsw-alias-label-secondary,#73757a)}'
+  style.textContent = '.smcp-unified[hidden]{display:none!important}.smcp-unified .smcp-bar[aria-busy="true"]{opacity:.4}.smcp-unified .smcp-bar[data-unloaded="true"]{background:transparent;border:1px solid currentColor;box-sizing:border-box}.smcp-navigation-status{position:absolute;left:0;top:100%;width:220px;font-size:12px;line-height:1.4;padding-top:12px;color:var(--dsw-alias-label-secondary,#73757a)}' + SEMANTIC_CSS
   const originalPosition = root.style.position
   const forcedPosition = window.getComputedStyle(root).position === 'static'
   if (forcedPosition) root.style.position = 'relative'
@@ -107,6 +112,8 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let pointerInside = false
   let requestedTurn: number | null = null
   let failedTurn: number | null = null
+  let localFailure = false
+  let activation = 0
   let nativeReady = false
   let warned = false
   let top = 0
@@ -130,6 +137,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     strip.removeAttribute('aria-describedby')
   }
   const fallback = (reason: string): void => {
+    activation++; landing.cancel()
     owner.release()
     strip.hidden = true
     closePreview()
@@ -168,7 +176,9 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     const outline = binding?.session.projections.faceOf('turnOutline').getSnapshot()
     const turns = mergeNavigationTurns(loaded, outline)
     nativeReady = owner.reconcile(turns)
-    const segments = buildNavigationNodes(nodes).filter(segment => owner.rowFor(segment.anchorKey) !== null)
+    landing.refresh()
+    const segments = buildNavigationNodes(nodes).filter(segment => owner.rowFor(segment.anchorKey) !== null
+      || ((segment.kind === 'question' || segment.kind === 'answer') && landing.canReveal(segment.anchorKey)))
     items = buildPianoItems(turns, segments, turn => copy('turn', turn))
     debug.total = items.length
     const rootRect = root.getBoundingClientRect()
@@ -192,8 +202,6 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     }
     active = readingKey() ?? `turn:${owner.active() ?? turns.at(-1)?.turn}`
     if (selected !== null && !items.some(item => item.key === selected)) selected = null
-    // Keep the user's target in the fixed window while the native pager is
-    // loading or keyboard focus is in the rail, rather than snapping to the tail.
     const centerKey = selected !== null && (document.activeElement === strip || pointerInside || busy !== null) ? selected : active
     const center = Math.max(0, items.findIndex(item => item.key === centerKey))
     const manual = browseStart === null ? -1 : items.findIndex(item => item.key === browseStart)
@@ -213,17 +221,16 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       let button = buttons.get(item.key)
       if (button === undefined) {
         button = document.createElement('button')
-        button.type = 'button'
-        button.tabIndex = -1
-        button.className = 'smcp-bar'
+        button.type = 'button'; button.tabIndex = -1; button.className = 'smcp-bar'
         button.dataset.key = item.key
         button.id = prefix + encodeURIComponent(item.key)
-        buttons.set(item.key, button)
-        strip.append(button)
+        buttons.set(item.key, button); strip.append(button)
       }
       button.dataset.turn = String(item.turn)
+      button.dataset.role = item.role
+      button.dataset.kind = item.kind ?? 'turn'
       button.dataset.unloaded = String(item.anchorKey === null)
-      button.setAttribute('aria-label', `${copy('turn', item.turn)}: ${item.title}`)
+      button.setAttribute('aria-label', `${copy('turn', item.turn)} · ${semanticLabel(item, config.language)}: ${item.title}`)
       button.setAttribute('aria-current', String(item.key === active))
       button.setAttribute('aria-busy', String(item.turn === busy))
       button.classList.toggle('smcp-bar-current', item.key === active)
@@ -236,37 +243,29 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     })
     const focused = visible.find(item => item.key === selected)
     if (focused !== undefined) {
-      title.textContent = focused.title
-      body.textContent = focused.preview
+      badge.textContent = semanticLabel(focused, config.language)
+      title.textContent = focused.title; body.textContent = focused.preview
       tooltip.style.left = `${Math.max(8, Math.min(left + 64, width - (tooltip.offsetWidth || 400) - 8))}px`
       tooltip.style.top = `${Math.max(8, Math.min(top + positions[focusIndex] - 48, root.clientHeight - (tooltip.offsetHeight || 150) - 8))}px`
       tooltip.classList.add('smcp-tooltip-visible')
       strip.setAttribute('aria-activedescendant', buttons.get(focused.key)!.id)
       strip.setAttribute('aria-describedby', tooltip.id)
     } else {
-      closePreview()
-      strip.removeAttribute('aria-activedescendant')
+      closePreview(); strip.removeAttribute('aria-activedescendant')
     }
-    status.textContent = busy !== null ? copy('loading', busy) : failedTurn !== null ? copy('failed', failedTurn) : ''
-    strip.hidden = false
-    owner.claim()
-    debug.mode = 'piano'
-    debug.hiddenReason = null
-    debug.bars = visible.length
-    debug.windowStart = windowStart
+    status.textContent = localFailure ? landingFailure(config.language)
+      : busy !== null ? copy('loading', busy) : failedTurn !== null ? copy('failed', failedTurn) : ''
+    strip.hidden = false; owner.claim()
+    debug.mode = 'piano'; debug.hiddenReason = null; debug.bars = visible.length; debug.windowStart = windowStart
   }
   const bind = (): void => {
     const id = ctx.sessions.list.getSnapshot().current
     const next = id === undefined ? undefined : ctx.sessions.binding(id)
     if (next === binding && sourceStop !== undefined) return
-    sourceStop?.()
-    sourceStop = undefined
-    owner.release()
+    sourceStop?.(); sourceStop = undefined
     fallback('binding')
-    binding = next
-    nodes = []
-    selected = active = browseStart = null
-    requestedTurn = failedTurn = null
+    binding = next; nodes = []; selected = active = browseStart = null
+    requestedTurn = failedTurn = null; localFailure = false
     debug.sessionId = id === undefined ? undefined : String(id)
     if (retry !== undefined) clearTimeout(retry)
     retry = undefined
@@ -275,8 +274,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       for (const button of buttons.values()) button.remove()
       buttons.clear()
       if (id !== undefined && retries++ < 20) retry = setTimeout(() => { retry = undefined; bind() }, 300)
-      schedule()
-      return
+      schedule(); return
     }
     retries = 0
     const target = ctx.uiConversation.binding(next).target('chat')
@@ -293,14 +291,17 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     schedule()
   }
   const activate = (item: PianoItem | undefined): void => {
-    if (item === undefined || !nativeReady) return
-    failedTurn = null
+    if (item === undefined || !nativeReady || strip.hidden) return
+    const ticket = ++activation
+    failedTurn = null; localFailure = false
     requestedTurn = item.anchorKey === null ? item.turn : null
-    if (!owner.navigate(item.turn, item.anchorKey)) { requestedTurn = null; fallback('contract'); return }
-    selected = item.key
-    active = item.key
-    browseStart = null
+    selected = item.key; active = item.key; browseStart = null
     strip.focus({ preventScroll: true })
+    void landing.navigate(item).then(ok => {
+      if (!alive || ticket !== activation || ok === undefined) return
+      if (!ok) { requestedTurn = null; localFailure = true }
+      schedule()
+    })
     schedule()
   }
   const nearest = (clientY: number): PianoItem | undefined => {
@@ -313,10 +314,8 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     return visible[best]
   }
   const pointerMove = (event: PointerEvent): void => {
-    pointerInside = true
-    browseStart ??= items[windowStart]?.key ?? null
-    selected = nearest(event.clientY)?.key ?? null
-    schedule()
+    pointerInside = true; browseStart ??= items[windowStart]?.key ?? null
+    selected = nearest(event.clientY)?.key ?? null; schedule()
   }
   const pointerLeave = (): void => { pointerInside = false; selected = null; browseStart = null; schedule() }
   const click = (event: MouseEvent): void => {
@@ -327,11 +326,13 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (event.deltaY === 0 || items.length === 0) return
     event.preventDefault()
     const index = Math.max(0, Math.min(items.length - Math.max(1, buttons.size), windowStart + Math.sign(event.deltaY) * 3))
-    browseStart = items[index]?.key ?? null
-    selected = null
-    schedule()
+    browseStart = items[index]?.key ?? null; selected = null; schedule()
   }
-  const cancel = (): void => { owner.cancel(); requestedTurn = failedTurn = null; schedule() }
+  const cancelLocal = (): void => {
+    activation++; landing.cancel()
+    requestedTurn = failedTurn = null; localFailure = false; schedule()
+  }
+  const cancel = (): void => { cancelLocal(); owner.cancel() }
   const keydown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') { event.preventDefault(); cancel(); selected = null; browseStart = null; return }
     if (event.key === 'Enter' || event.key === ' ') {
@@ -350,33 +351,32 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') !== null) return
     if (['ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', ' '].includes(event.key)) cancel()
   }
+  const readerPointer = (event: Event): void => {
+    // NativeNavigation already handles pointerdown once, including touch.
+    // This listener only retires the short local disclosure transaction.
+    if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') === null) cancelLocal()
+  }
   const onScroll = (): void => { if (!pointerInside && document.activeElement !== strip) browseStart = null; schedule() }
   const dom = new MutationObserver(schedule)
   dom.observe(local, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy'] })
   const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
   resize?.observe(root); resize?.observe(flow); resize?.observe(scrollport)
-  strip.addEventListener('pointermove', pointerMove)
-  strip.addEventListener('pointerleave', pointerLeave)
-  strip.addEventListener('click', click)
-  strip.addEventListener('wheel', wheel, { passive: false })
-  strip.addEventListener('keydown', keydown)
-  scrollport.addEventListener('scroll', onScroll, { passive: true })
-  scrollport.addEventListener('wheel', cancel, { passive: true })
-  scrollport.addEventListener('touchstart', cancel, { passive: true })
+  strip.addEventListener('pointermove', pointerMove); strip.addEventListener('pointerleave', pointerLeave)
+  strip.addEventListener('click', click); strip.addEventListener('wheel', wheel, { passive: false }); strip.addEventListener('keydown', keydown)
+  scrollport.addEventListener('scroll', onScroll, { passive: true }); scrollport.addEventListener('wheel', cancel, { passive: true })
+  scrollport.addEventListener('touchstart', readerPointer, { passive: true }); scrollport.addEventListener('pointerdown', readerPointer, { passive: true })
   scrollport.addEventListener('keydown', readerKey)
   const listStop = ctx.sessions.list.subscribe(() => { retries = 0; bind() })
   const settingsStop = settings.subscribe(schedule)
   const dispose = (): void => {
     if (!alive) return
-    alive = false
+    alive = false; activation++; landing.cancel()
     if (binding?.session.sessionId === ctx.sessions.list.getSnapshot().current) owner.cancel()
-    owner.release()
-    sourceStop?.(); listStop(); settingsStop(); dom.disconnect(); resize?.disconnect()
+    owner.release(); sourceStop?.(); listStop(); settingsStop(); dom.disconnect(); resize?.disconnect()
     if (retry !== undefined) clearTimeout(retry)
     if (frame !== 0) window.cancelAnimationFrame(frame)
-    scrollport.removeEventListener('scroll', onScroll)
-    scrollport.removeEventListener('wheel', cancel)
-    scrollport.removeEventListener('touchstart', cancel)
+    scrollport.removeEventListener('scroll', onScroll); scrollport.removeEventListener('wheel', cancel)
+    scrollport.removeEventListener('touchstart', readerPointer); scrollport.removeEventListener('pointerdown', readerPointer)
     scrollport.removeEventListener('keydown', readerKey)
     strip.remove(); tooltip.remove(); style.remove()
     if (forcedPosition && root.style.position === 'relative') root.style.position = originalPosition
