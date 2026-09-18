@@ -84,7 +84,7 @@
   "scripts": {
     "build": "tsc -b && tsdown -c tsdown.host.config.mjs --config-loader tsx && tsdown -c tsdown.client.config.mjs --config-loader tsx && node scripts/wrap-client.mjs",
     "typecheck": "tsc -b",
-    "test:contracts": "node --import tsx scripts/chat-source.mjs && node --import tsx scripts/navigation-contract.mjs && node --import tsx scripts/full-history-contract.mjs && node --import tsx scripts/native-navigation-contract.mjs",
+    "test:contracts": "node --import tsx scripts/chat-source.mjs && node --import tsx scripts/navigation-contract.mjs && node --import tsx scripts/full-history-contract.mjs && node --import tsx scripts/native-navigation-contract.mjs && node --import tsx scripts/semantic-contract.mjs && node --import tsx scripts/semantic-dom.mjs",
     "test": "pnpm test:contracts && node --import tsx scripts/grouping.mjs && node scripts/smoke.mjs && node scripts/integration.mjs",
     "verify": "pnpm build && pnpm test",
     "watch": "tsdown -c tsdown.client.config.mjs --config-loader tsx --watch"
