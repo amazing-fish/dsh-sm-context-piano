@@ -345,25 +345,32 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (retry !== undefined) clearTimeout(retry)
     retry = undefined
     if (next === undefined) {
-      items = []
+      turns = []; segments = []; items = []
+      itemByKey.clear(); itemIndexByKey.clear(); firstItemByAnchor.clear()
       for (const button of buttons.values()) button.remove()
       buttons.clear()
       if (id !== undefined && retries++ < 20) retry = setTimeout(() => { retry = undefined; bind() }, 300)
-      schedule(); return
+      schedule(DIRTY_ALL); return
     }
     retries = 0
     const target = ctx.uiConversation.binding(next).target('chat')
     const stops: (() => void)[] = []
     try {
-      stops.push(observeChatNodes(target, value => { if (alive && binding === next) { nodes = value; schedule() } }))
-      stops.push(next.session.projections.faceOf('turnOutline').subscribe(schedule))
-      stops.push(next.session.subscribe(schedule))
+      stops.push(observeChatNodes(target, (value, change) => {
+        if (!alive || binding !== next) return
+        nodes = value
+        schedule(change === 'keyed'
+          ? DIRTY_NODES | DIRTY_VIEW
+          : DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_NATIVE_STATE | DIRTY_VIEW)
+      }))
+      stops.push(next.session.projections.faceOf('turnOutline').subscribe(() => schedule(DIRTY_TURNS | DIRTY_NATIVE_STATE | DIRTY_VIEW)))
+      stops.push(next.session.subscribe(() => schedule(DIRTY_NATIVE_STATE | DIRTY_VIEW)))
       sourceStop = () => { for (const dispose of stops) dispose() }
     } catch (error) {
       for (const dispose of stops.reverse()) dispose()
       throw error
     }
-    schedule()
+    schedule(DIRTY_ALL)
   }
   const activate = (item: PianoItem | undefined): void => {
     if (item === undefined || !nativeReady || strip.hidden) return
@@ -380,47 +387,53 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     schedule()
   }
   const nearest = (clientY: number): PianoItem | undefined => {
-    const config = settings.getSnapshot()
-    const visible = items.slice(windowStart, windowStart + buttons.size)
-    const positions = stackPositions(visible.length, Number.parseFloat(strip.style.height), config.keyGap, config.keyHeight)
+    if (visibleItems.length === 0) return undefined
     let best = 0
-    const y = clientY - strip.getBoundingClientRect().top
-    for (let i = 1; i < positions.length; i++) if (Math.abs(positions[i] - y) < Math.abs(positions[best] - y)) best = i
-    return visible[best]
+    const y = clientY - stripViewportTop
+    for (let i = 1; i < visiblePositions.length; i++) {
+      if (Math.abs(visiblePositions[i] - y) < Math.abs(visiblePositions[best] - y)) best = i
+    }
+    return visibleItems[best]
   }
   const pointerMove = (event: PointerEvent): void => {
-    pointerInside = true; browseStart ??= items[windowStart]?.key ?? null
-    selected = nearest(event.clientY)?.key ?? null; schedule()
+    const next = nearest(event.clientY)?.key ?? null
+    const changed = !pointerInside || next !== selected
+    pointerInside = true
+    browseStart ??= items[windowStart]?.key ?? null
+    if (!changed) return
+    selected = next
+    schedule(DIRTY_VIEW)
   }
-  const pointerLeave = (): void => { pointerInside = false; selected = null; browseStart = null; schedule() }
+  const pointerLeave = (): void => { pointerInside = false; selected = null; browseStart = null; schedule(DIRTY_VIEW) }
   const click = (event: MouseEvent): void => {
     const key = (event.target as HTMLElement).closest<HTMLElement>('[data-key]')?.dataset.key
-    activate(key === undefined ? nearest(event.clientY) : items.find(item => item.key === key))
+    activate(key === undefined ? nearest(event.clientY) : itemByKey.get(key))
   }
   const wheel = (event: WheelEvent): void => {
     if (event.deltaY === 0 || items.length === 0) return
     event.preventDefault()
-    const index = Math.max(0, Math.min(items.length - Math.max(1, buttons.size), windowStart + Math.sign(event.deltaY) * 3))
-    browseStart = items[index]?.key ?? null; selected = null; schedule()
+    const index = Math.max(0, Math.min(items.length - Math.max(1, visibleItems.length), windowStart + Math.sign(event.deltaY) * 3))
+    browseStart = items[index]?.key ?? null; selected = null; schedule(DIRTY_VIEW)
   }
   const cancelLocal = (): void => {
     activation++; landing.cancel()
-    requestedTurn = failedTurn = null; localFailure = false; schedule()
+    requestedTurn = failedTurn = null; localFailure = false; schedule(DIRTY_NATIVE_STATE | DIRTY_VIEW)
   }
   const cancel = (): void => { cancelLocal(); owner.cancel() }
   const keydown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') { event.preventDefault(); cancel(); selected = null; browseStart = null; return }
     if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault(); activate(items.find(item => item.key === (selected ?? active)) ?? items[windowStart]); return
+      event.preventDefault(); activate(itemByKey.get(selected ?? active ?? '') ?? items[windowStart]); return
     }
     if (!['ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return
     event.preventDefault()
-    const index = Math.max(0, items.findIndex(item => item.key === (selected ?? active)))
+    const index = Math.max(0, itemIndexByKey.get(selected ?? active ?? '') ?? 0)
+    const page = Math.max(1, visibleItems.length)
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
-      : Math.max(0, Math.min(items.length - 1, index + (event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : event.key === 'PageUp' ? -buttons.size : buttons.size)))
+      : Math.max(0, Math.min(items.length - 1, index + (event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : event.key === 'PageUp' ? -page : page)))
     selected = items[next]?.key ?? null
-    browseStart = items[visibleWindow(items.length, next, Math.max(1, buttons.size)).start]?.key ?? null
-    schedule()
+    browseStart = items[visibleWindow(items.length, next, page).start]?.key ?? null
+    schedule(DIRTY_VIEW)
   }
   const readerKey = (event: KeyboardEvent): void => {
     if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') !== null) return
@@ -431,10 +444,23 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     // This listener only retires the short local disclosure transaction.
     if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') === null) cancelLocal()
   }
-  const onScroll = (): void => { if (!pointerInside && document.activeElement !== strip) browseStart = null; schedule() }
-  const dom = new MutationObserver(schedule)
+  const onScroll = (): void => {
+    if (!pointerInside && document.activeElement !== strip) browseStart = null
+    schedule(DIRTY_VIEW)
+  }
+  const dom = new MutationObserver(records => {
+    let flags = DIRTY_VIEW
+    for (const record of records) {
+      if (record.type === 'childList' || record.attributeName === 'hidden' || record.attributeName === 'aria-label') {
+        flags |= DIRTY_DOM
+        break
+      }
+      if (record.attributeName === 'aria-current' || record.attributeName === 'aria-busy') flags |= DIRTY_NATIVE_STATE
+    }
+    schedule(flags)
+  })
   dom.observe(local, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy'] })
-  const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
+  const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => schedule(DIRTY_LAYOUT | DIRTY_VIEW))
   resize?.observe(root); resize?.observe(flow); resize?.observe(scrollport)
   strip.addEventListener('pointermove', pointerMove); strip.addEventListener('pointerleave', pointerLeave)
   strip.addEventListener('click', click); strip.addEventListener('wheel', wheel, { passive: false }); strip.addEventListener('keydown', keydown)
@@ -442,7 +468,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   scrollport.addEventListener('touchstart', readerPointer, { passive: true }); scrollport.addEventListener('pointerdown', readerPointer, { passive: true })
   scrollport.addEventListener('keydown', readerKey)
   const listStop = ctx.sessions.list.subscribe(() => { retries = 0; bind() })
-  const settingsStop = settings.subscribe(schedule)
+  const settingsStop = settings.subscribe(() => schedule(DIRTY_NODES | DIRTY_TURNS | DIRTY_LAYOUT | DIRTY_VIEW))
   const dispose = (): void => {
     if (!alive) return
     alive = false; activation++; landing.cancel()
