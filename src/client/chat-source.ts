@@ -31,6 +31,8 @@ export function observeChatNodes(
   let orderedKeys: string[] = []
   let orderedNodes: ChatConversationViewNode[] = []
   let indexByKey = new Map<string, number>()
+  let orderIdentity: readonly string[] | undefined
+  let storeIdentity: ChatSnapshot['nodes'] | undefined
 
   const dispose = (): void => {
     if (!alive) return
@@ -42,6 +44,8 @@ export function observeChatNodes(
     orderedKeys = []
     orderedNodes = []
     indexByKey.clear()
+    orderIdentity = undefined
+    storeIdentity = undefined
   }
 
   const enqueue = (): void => {
@@ -52,8 +56,13 @@ export function observeChatNodes(
       if (!alive) return
       if (structureDirty) {
         structureDirty = false
+        const keys = [...keyedDirty]
         keyedDirty.clear()
-        reconcileStructure()
+        // The official ChatSnapshotBuilder preserves both order and node-store
+        // identity for content-only upserts. Target snapshots can still publish
+        // in that case, so do not turn those notifications into an O(N) walk.
+        const changed = reconcileStructure()
+        if (!changed && keys.length > 0) refreshKeys(keys)
       } else if (keyedDirty.size > 0) {
         const keys = [...keyedDirty]
         keyedDirty.clear()
@@ -83,8 +92,9 @@ export function observeChatNodes(
     })
   }
 
-  const reconcileStructure = (): void => {
+  const reconcileStructure = (): boolean => {
     const snapshot = source.getSnapshot()
+    if (snapshot !== undefined && snapshot.order === orderIdentity && snapshot.nodes === storeIdentity) return false
     const nextOrder = snapshot?.order ?? []
     const remaining = new Set(nextOrder)
     for (const [key, entry] of subscriptions) {
@@ -110,7 +120,10 @@ export function observeChatNodes(
     orderedKeys = nextKeys
     orderedNodes = nextNodes
     indexByKey = nextIndex
+    orderIdentity = snapshot?.order
+    storeIdentity = snapshot?.nodes
     publish(orderedNodes, 'structure')
+    return true
   }
 
   const refreshKeys = (keys: readonly string[]): void => {
