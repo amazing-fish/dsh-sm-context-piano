@@ -274,6 +274,18 @@ await check('full-history Home/End keys work independently of maxVisible', async
   await press('Home')
   assert.ok(key('turn:1'))
 })
+await check('unrelated Session publications do not wake the Piano render loop', async () => {
+  const before = globalThis.__smcpDebug.perf.renders
+  sessionState.set({ ...sessionState.getSnapshot(), unrelatedStreamingTick: 1 })
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.renders, before)
+  sessionState.set({ ...sessionState.getSnapshot(), loadingOlder: true })
+  await frame()
+  assert.ok(globalThis.__smcpDebug.perf.renders > before)
+  sessionState.set({ ...sessionState.getSnapshot(), loadingOlder: false })
+  await frame()
+})
+
 await check('unloaded activation delegates once and shows native busy state', async () => {
   await press('Enter')
   assert.deepEqual(requests, [1])
