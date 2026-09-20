@@ -72,6 +72,31 @@ test('keyed streaming refresh reads only the changed node, not the full order', 
   f.stop()
 })
 
+test('stable target publication does not reread a long node order', () => {
+  const keys = Array.from({ length: 1000 }, (_, index) => `assistant:${index}`)
+  const f = fixture(keys)
+  const beforePublications = f.publications.length
+  f.resetGetCount()
+  f.target.emit({ ...f.target.getSnapshot() })
+  f.flush()
+  assert.equal(f.getCount, 0)
+  assert.equal(f.publications.length, beforePublications)
+  f.stop()
+})
+
+test('stable target plus keyed publication still reads only the dirty node', () => {
+  const keys = Array.from({ length: 1000 }, (_, index) => `assistant:${index}`)
+  const f = fixture(keys)
+  f.resetGetCount()
+  f.map.set('assistant:999', { key: 'assistant:999', kind: 'assistant', data: { text: 'coalesced update' } })
+  f.target.emit({ ...f.target.getSnapshot() })
+  f.sources.get('assistant:999').emit()
+  f.flush()
+  assert.equal(f.getCount, 1)
+  assert.equal(f.publications.at(-1).at(-1).data.text, 'coalesced update')
+  f.stop()
+})
+
 test('coalesces multiple node and target notifications', () => {
   const f = fixture()
   for (let index = 0; index < 10; index += 1) f.sources.get('assistant:1').emit()
