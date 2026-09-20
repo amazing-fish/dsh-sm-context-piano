@@ -19,7 +19,7 @@ export interface PianoChatSource {
  */
 export function observeChatNodes(
   source: PianoChatSource,
-  publish: (nodes: readonly ChatConversationViewNode[], change?: 'structure' | 'keyed') => void,
+  publish: (nodes: readonly ChatConversationViewNode[], change?: 'structure' | 'keyed', dirtyKeys?: readonly string[]) => void,
   schedule: (callback: () => void) => void = queueMicrotask,
 ): () => void {
   let alive = true
@@ -138,7 +138,7 @@ export function observeChatNodes(
         return
       }
     }
-    publish(orderedNodes, 'keyed')
+    publish(orderedNodes, 'keyed', keys)
   }
 
   try {
