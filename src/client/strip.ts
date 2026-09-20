@@ -38,6 +38,7 @@ const DIRTY_LAYOUT = 1 << 3
 const DIRTY_NATIVE_STATE = 1 << 4
 const DIRTY_VIEW = 1 << 5
 const DIRTY_KEYED_NODES = 1 << 6
+const DIRTY_READER = 1 << 7
 const DIRTY_ALL = DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW
 const STREAM_SEMANTIC_MIN_INTERVAL_MS = 120
 
@@ -181,7 +182,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let visiblePositions: number[] = []
   let tooltipKey: string | null = null
   const buttons = new Map<string, HTMLButtonElement>()
-  const perf = { renders: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, mappedAnchorRebuilds: 0, hitTests: 0, barWrites: 0 }
+  const perf = { renders: 0, readerSkips: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, mappedAnchorRebuilds: 0, hitTests: 0, barWrites: 0 }
   const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', perf }
   const writeData = (button: HTMLButtonElement, name: string, value: string): void => {
     if (button.dataset[name] === value) return
@@ -459,6 +460,15 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       fallback(!nativeReady ? 'contract' : items.length === 0 ? 'empty' : width < 520 ? 'narrow' : 'overlap')
       return
     }
+    const readerOnly = (pending & DIRTY_READER) !== 0 && (pending & ~DIRTY_READER) === 0
+    if (readerOnly) {
+      const nextActive = readingKey() ?? `turn:${nativeActiveTurn ?? turns.at(-1)?.turn}`
+      if (nextActive === active) {
+        perf.readerSkips++
+        return
+      }
+      active = nextActive
+    }
     const config = settings.getSnapshot()
     const loadedBusy = sessionLoadingOlder
     if (requestedTurn !== null && busyTurn === null && !loadedBusy) {
@@ -466,7 +476,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       failedTurn = destination?.anchor.kind === 'unloaded' ? requestedTurn : null
       requestedTurn = null
     }
-    active = readingKey() ?? `turn:${nativeActiveTurn ?? turns.at(-1)?.turn}`
+    if (!readerOnly) active = readingKey() ?? `turn:${nativeActiveTurn ?? turns.at(-1)?.turn}`
     if (selected !== null && !itemByKey.has(selected)) selected = null
     const centerKey = selected !== null && (document.activeElement === strip || pointerInside || busyTurn !== null) ? selected : active
     const center = Math.max(0, centerKey === null ? 0 : itemIndexByKey.get(centerKey) ?? 0)
@@ -663,8 +673,9 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') === null) cancelLocal()
   }
   const onScroll = (): void => {
-    if (!pointerInside && document.activeElement !== strip) browseStart = null
-    schedule(DIRTY_VIEW)
+    const clearBrowse = !pointerInside && document.activeElement !== strip && browseStart !== null
+    if (clearBrowse) browseStart = null
+    schedule(DIRTY_READER | (clearBrowse ? DIRTY_VIEW : 0))
   }
   let composerSeat = scrollport.querySelector<HTMLElement>('[data-composer-seat]')
   let resize: ResizeObserver | null = null
