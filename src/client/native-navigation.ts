@@ -20,6 +20,8 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   let turns: readonly NavigationTurn[] = []
   let rows = new Map<string, HTMLElement>()
   let orderedRows: HTMLElement[] = []
+  let mappedAnchors = new Set<string>()
+  let mappedRows: HTMLElement[] = []
   // Only bridges synchronous input before the next native DOM publication.
   // Once reconciled, the native aria-busy state is the sole pending authority.
   let issuedUnloaded = false
@@ -36,6 +38,11 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       rows.set(row.dataset.chatAnchorKey, row)
       orderedRows.push(row)
     }
+    mappedRows = orderedRows.filter(row => mappedAnchors.has(row.dataset.chatAnchorKey ?? ''))
+  }
+  const setMappedAnchors = (anchors: Iterable<string>): void => {
+    mappedAnchors = new Set(anchors)
+    mappedRows = orderedRows.filter(row => mappedAnchors.has(row.dataset.chatAnchorKey ?? ''))
   }
   const release = (): void => {
     issuedUnloaded = false
@@ -58,13 +65,13 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   }
   const anchorAtOrBefore = (clientY: number): string | null => {
     let low = 0
-    let high = orderedRows.length - 1
+    let high = mappedRows.length - 1
     let chosen: HTMLElement | null = null
-    // DOM rows are transcript-ordered. Binary search limits the gap fallback
-    // to O(log N) rect reads instead of rescanning every message.
+    // Only rows represented in the Piano participate, so unkeyed process/control
+    // anchors cannot force a fallback to the beginning of the Turn.
     while (low <= high) {
       const middle = (low + high) >>> 1
-      const row = orderedRows[middle]
+      const row = mappedRows[middle]
       if (!row.isConnected || row.closest('[hidden]') !== null) {
         refreshRows()
         return anchorAtOrBefore(clientY)
@@ -87,7 +94,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     return null
   }
   const api = {
-    rowFor, anchorAtOrBefore, release, busy,
+    rowFor, setMappedAnchors, anchorAtOrBefore, release, busy,
     /** One row scan per publication, never one scan per mark. */
     reconcile(next: readonly NavigationTurn[]): boolean {
       refreshRows()
