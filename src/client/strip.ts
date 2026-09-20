@@ -364,7 +364,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
         nodes = value
         schedule(change === 'keyed'
           ? DIRTY_NODES | DIRTY_VIEW
-          : DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_NATIVE_STATE | DIRTY_VIEW)
+          : DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW)
       }))
       stops.push(next.session.projections.faceOf('turnOutline').subscribe(() => schedule(DIRTY_TURNS | DIRTY_NATIVE_STATE | DIRTY_VIEW)))
       stops.push(next.session.subscribe(() => schedule(DIRTY_NATIVE_STATE | DIRTY_VIEW)))
