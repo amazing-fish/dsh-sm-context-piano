@@ -103,7 +103,9 @@ try {
     assert.equal(await key('final').count(), 1)
   })
   await test('semantic palette distinguishes output, input, answer, question and final in light/dark themes', async () => {
-    const input = key('input').first(), output = key('output').first(), answer = key('answer').first()
+    await page.evaluate(() => window.semanticFixture.normal())
+    await page.waitForFunction(() => document.querySelectorAll('.smcp-bar[data-kind="output"]').length > 0)
+    const input = key('input').first(), output = key('output', 1).first(), answer = key('answer').first()
     const question = key('question').first(), final = key('final').first()
     const rgb = value => (value.match(/[\\d.]+/g) ?? []).slice(0, 3).map(Number)
     const neutral = ([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) <= 32
