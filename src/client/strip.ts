@@ -57,13 +57,12 @@ export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKe
     }
     // Once mounted, watch only the active flow's ancestor chain. React message
     // body churn is below the flow and must not wake the global lifecycle path.
-    let node: HTMLElement | null = flow
+    observer.observe(flow, { attributes: true, attributeFilter: ['hidden'] })
+    let node: HTMLElement | null = flow.parentElement
     while (node !== null) {
-      observer.observe(node, { attributes: true, attributeFilter: ['hidden'] })
-      const parent: HTMLElement | null = node.parentElement
-      if (parent !== null) observer.observe(parent, { childList: true })
+      observer.observe(node, { childList: true, attributes: true, attributeFilter: ['hidden'] })
       if (node === document.body) break
-      node = parent
+      node = node.parentElement
     }
   }
   const reconcile = (): void => {
@@ -705,7 +704,11 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (next === nativeSurface) return
     nativeStructureDom.disconnect()
     nativeSurface = next
-    if (nativeSurface !== null) nativeStructureDom.observe(nativeSurface, { childList: true, subtree: true })
+    if (nativeSurface !== null) {
+      nativeStructureDom.observe(nativeSurface, { childList: true, subtree: true })
+      const parent = nativeSurface.parentElement
+      if (parent !== null && parent !== local) nativeStructureDom.observe(parent, { childList: true })
+    }
   }
   const structureDom = new MutationObserver(records => {
     if (!records.some(childListChangesNavigation)) return
@@ -723,7 +726,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     for (const record of records) {
       const target = record.target instanceof window.Element ? record.target : null
       if (record.attributeName === 'hidden') {
-        flags |= DIRTY_DOM | DIRTY_VIEW
+        if (target === null || !flow.contains(target) || target.matches('[data-chat-anchor-key]')) flags |= DIRTY_DOM | DIRTY_VIEW
         continue
       }
       // Native contract attributes live outside the transcript flow. Ignore
