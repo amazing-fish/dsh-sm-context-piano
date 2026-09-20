@@ -155,11 +155,13 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let height = 0
   let capacity = 1
   let stripViewportTop = 0
+  let readingLineY = 0
+  let hitTestXs: number[] = []
   let visibleItems: PianoItem[] = []
   let visiblePositions: number[] = []
   let tooltipKey: string | null = null
   const buttons = new Map<string, HTMLButtonElement>()
-  const perf = { renders: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, hitTests: 0 }
+  const perf = { renders: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, mappedAnchorRebuilds: 0, hitTests: 0, barWrites: 0 }
   const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', perf }
   const debugHost = globalThis as unknown as { __smcpDebug?: typeof debug }
   debugHost.__smcpDebug = debug
@@ -225,14 +227,10 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   }
   const readingKey = (): string | null => {
     perf.hitTests++
-    const line = scrollport.getBoundingClientRect().top + Math.min(120, scrollport.clientHeight * .18)
-    const flowRect = flow.getBoundingClientRect()
     const hitTest = document.elementsFromPoint?.bind(document)
-    if (typeof hitTest === 'function' && flowRect.width > 0) {
-      const xs = [Math.min(flowRect.right - 1, flowRect.left + 18), flowRect.left + flowRect.width / 2]
-      const ys = [line, line - 8, line + 8]
-      for (const y of ys) for (const x of xs) {
-        for (const element of hitTest(x, y)) {
+    if (typeof hitTest === 'function') {
+      for (const x of hitTestXs) {
+        for (const element of hitTest(x, readingLineY)) {
           const row = (element as HTMLElement).closest<HTMLElement>('[data-chat-anchor-key]')
           if (row === null || !flow.contains(row) || row.closest('[hidden]') !== null) continue
           const anchor = row.dataset.chatAnchorKey
@@ -242,7 +240,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
         }
       }
     }
-    const preceding = owner.anchorAtOrBefore(line)
+    const preceding = owner.anchorAtOrBefore(readingLineY)
     if (preceding !== null) {
       const key = firstItemByAnchor.get(preceding)
       if (key !== undefined) return key
@@ -265,6 +263,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       else range.count++
     })
     owner.setMappedAnchors(firstItemByAnchor.keys())
+    perf.mappedAnchorRebuilds++
   }
   const rebuildSemanticState = (): void => {
     keyedDirtyKeys.clear()
@@ -304,18 +303,26 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (range === undefined || range.count !== nextItems.length) return false
     const previous = items.slice(range.start, range.start + range.count)
     if (previous.some((item, index) => item.key !== nextItems[index]?.key)) return false
-    const oldKeys = new Set(previous.map(item => item.key))
-    for (const item of previous) {
-      if (item.anchorKey !== null && oldKeys.has(firstItemByAnchor.get(item.anchorKey) ?? '')) firstItemByAnchor.delete(item.anchorKey)
+    const anchorsStable = previous.every((item, index) => item.anchorKey === nextItems[index]?.anchorKey)
+    if (!anchorsStable) {
+      const oldKeys = new Set(previous.map(item => item.key))
+      for (const item of previous) {
+        if (item.anchorKey !== null && oldKeys.has(firstItemByAnchor.get(item.anchorKey) ?? '')) firstItemByAnchor.delete(item.anchorKey)
+      }
     }
     nextItems.forEach((item, offset) => {
       const index = range.start + offset
       items[index] = item
       itemByKey.set(item.key, item)
       itemIndexByKey.set(item.key, index)
-      if (item.anchorKey !== null && !firstItemByAnchor.has(item.anchorKey)) firstItemByAnchor.set(item.anchorKey, item.key)
+      if (!anchorsStable && item.anchorKey !== null && !firstItemByAnchor.has(item.anchorKey)) firstItemByAnchor.set(item.anchorKey, item.key)
     })
-    owner.setMappedAnchors(firstItemByAnchor.keys())
+    // Streaming text normally changes only preview/title. Avoid re-filtering every
+    // transcript row when the stable Piano key -> DOM anchor mapping is unchanged.
+    if (!anchorsStable) {
+      owner.setMappedAnchors(firstItemByAnchor.keys())
+      perf.mappedAnchorRebuilds++
+    }
     return true
   }
   const refreshKeyedSemantic = (): void => {
@@ -392,15 +399,21 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     }
     if ((pending & DIRTY_LAYOUT) !== 0 || width === 0) {
       const rootRect = root.getBoundingClientRect()
-      flowLeft = flow.getBoundingClientRect().left - rootRect.left
+      const flowRect = flow.getBoundingClientRect()
+      const scrollRect = scrollport.getBoundingClientRect()
+      flowLeft = flowRect.left - rootRect.left
       width = root.clientWidth || rootRect.width
       left = Math.max(16, flowLeft - 108)
       const config = settings.getSnapshot()
       const available = Math.max(0, scrollport.clientHeight - (composerSeat?.offsetHeight ?? 0))
       height = Math.min(railHeight(config), Math.max(config.keyHeight, available - 48))
       capacity = Math.min(config.maxVisible, Math.max(1, Math.floor((height - config.keyHeight) / config.keyGap) + 1))
-      top = Math.max(8, (scrollport.getBoundingClientRect().top - rootRect.top) + (available - height) / 2)
+      top = Math.max(8, (scrollRect.top - rootRect.top) + (available - height) / 2)
       stripViewportTop = rootRect.top + top
+      readingLineY = scrollRect.top + Math.min(120, scrollport.clientHeight * .18)
+      hitTestXs = flowRect.width > 0
+        ? [flowRect.left + flowRect.width / 2, Math.min(flowRect.right - 1, flowRect.left + 18)]
+        : []
     }
     if (!nativeReady || items.length === 0 || width < 520 || left + 70 > flowLeft) {
       fallback(!nativeReady ? 'contract' : items.length === 0 ? 'empty' : width < 520 ? 'narrow' : 'overlap')
@@ -421,10 +434,13 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     windowStart = manual < 0 ? visibleWindow(items.length, center, capacity).start
       : Math.max(0, Math.min(items.length - capacity, manual))
     visibleItems = items.slice(windowStart, windowStart + capacity)
-    strip.style.top = `${top}px`
-    strip.style.transform = 'none'
-    strip.style.left = `${left}px`
-    strip.style.height = `${height}px`
+    const stripTop = `${top}px`
+    const stripLeft = `${left}px`
+    const stripHeight = `${height}px`
+    if (strip.style.top !== stripTop) strip.style.top = stripTop
+    if (strip.style.transform !== 'none') strip.style.transform = 'none'
+    if (strip.style.left !== stripLeft) strip.style.left = stripLeft
+    if (strip.style.height !== stripHeight) strip.style.height = stripHeight
     visiblePositions = stackPositions(visibleItems.length, height, config.keyGap, config.keyHeight)
     const retained = new Set(visibleItems.map(item => item.key))
     for (const [key, button] of buttons) if (!retained.has(key)) { button.remove(); buttons.delete(key) }
@@ -438,20 +454,35 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
         button.id = prefix + encodeURIComponent(item.key)
         buttons.set(item.key, button); strip.append(button)
       }
-      button.dataset.turn = String(item.turn)
-      button.dataset.role = item.role
-      button.dataset.kind = item.kind ?? 'turn'
-      button.dataset.unloaded = String(item.anchorKey === null)
-      button.setAttribute('aria-label', `${copy('turn', item.turn)} · ${semanticLabel(item, config.language)}: ${item.title}`)
-      button.setAttribute('aria-current', String(item.key === active))
-      button.setAttribute('aria-busy', String(item.turn === busyTurn))
+      const writeData = (name: string, value: string): void => {
+        if (button!.dataset[name] === value) return
+        button!.dataset[name] = value
+        perf.barWrites++
+      }
+      const writeAttr = (name: string, value: string): void => {
+        if (button!.getAttribute(name) === value) return
+        button!.setAttribute(name, value)
+        perf.barWrites++
+      }
+      const writeStyle = (name: 'top' | 'height' | 'width', value: string): void => {
+        if (button!.style[name] === value) return
+        button!.style[name] = value
+        perf.barWrites++
+      }
+      writeData('turn', String(item.turn))
+      writeData('role', item.role)
+      writeData('kind', item.kind ?? 'turn')
+      writeData('unloaded', String(item.anchorKey === null))
+      writeAttr('aria-label', `${copy('turn', item.turn)} · ${semanticLabel(item, config.language)}: ${item.title}`)
+      writeAttr('aria-current', String(item.key === active))
+      writeAttr('aria-busy', String(item.turn === busyTurn))
       button.classList.toggle('smcp-bar-current', item.key === active)
       button.classList.toggle('smcp-bar-hover', item.key === selected)
-      button.style.top = `${visiblePositions[index] - config.keyHeight / 2}px`
-      button.style.height = `${config.keyHeight}px`
+      writeStyle('top', `${visiblePositions[index] - config.keyHeight / 2}px`)
+      writeStyle('height', `${config.keyHeight}px`)
       const base = item.key === active ? 24 : 10
       const wave = focusIndex < 0 ? 0 : Math.exp(-((index - focusIndex) ** 2) / (2 * 1.35 ** 2))
-      button.style.width = `${base + (48 - base) * wave}px`
+      writeStyle('width', `${base + (48 - base) * wave}px`)
     })
     const focused = focusIndex < 0 ? undefined : visibleItems[focusIndex]
     if (focused !== undefined) {
@@ -607,43 +638,59 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let resize: ResizeObserver | null = null
   const touchesAnchor = (node: Node): boolean => node instanceof Element
     && (node.matches('[data-chat-anchor-key]') || node.querySelector('[data-chat-anchor-key]') !== null)
+  const touchesNavigation = (node: Node): boolean => node instanceof Element
+    && (node.matches('nav,[role="navigation"]') || node.querySelector('nav,[role="navigation"]') !== null)
   const touchesComposer = (node: Node): boolean => node instanceof Element
     && (node.matches('[data-composer-seat]') || node.querySelector('[data-composer-seat]') !== null)
+  let composerParent: HTMLElement | null = composerSeat?.parentElement ?? null
+  let composerDom: MutationObserver | null = null
+  const observeComposerParent = (): void => {
+    composerDom?.disconnect()
+    if (composerDom === null) return
+    composerDom.observe(scrollport, { childList: true })
+    if (composerParent !== null && composerParent !== scrollport) composerDom.observe(composerParent, { childList: true })
+  }
   const syncComposerSeat = (): void => {
     const next = scrollport.querySelector<HTMLElement>('[data-composer-seat]')
-    if (next === composerSeat) return
+    const nextParent = next?.parentElement ?? null
+    if (next === composerSeat && nextParent === composerParent) return
     if (composerSeat !== null) resize?.unobserve(composerSeat)
     composerSeat = next
+    composerParent = nextParent
     if (composerSeat !== null) resize?.observe(composerSeat)
+    observeComposerParent()
   }
   const childListChangesNavigation = (record: MutationRecord): boolean => {
     const target = record.target instanceof Element ? record.target : record.target.parentElement
-    if (target?.closest('nav,[role="navigation"]') !== null && !flow.contains(target)) return true
+    const outsideFlow = target === null || !flow.contains(target)
+    if (outsideFlow && target?.closest('nav,[role="navigation"]') !== null) return true
+    if (outsideFlow) {
+      for (const node of record.addedNodes) if (touchesNavigation(node)) return true
+      for (const node of record.removedNodes) if (touchesNavigation(node)) return true
+    }
     for (const node of record.addedNodes) if (touchesAnchor(node)) return true
     for (const node of record.removedNodes) if (touchesAnchor(node)) return true
     return false
   }
-  const childListChangesComposer = (record: MutationRecord): boolean => {
-    for (const node of record.addedNodes) if (touchesComposer(node)) return true
-    for (const node of record.removedNodes) if (touchesComposer(node)) return true
-    return false
-  }
   const dom = new MutationObserver(records => {
     let flags = 0
-    let composerChanged = false
     for (const record of records) {
       if (record.type === 'childList') {
         if (childListChangesNavigation(record)) flags |= DIRTY_DOM | DIRTY_VIEW
-        if (childListChangesComposer(record)) { flags |= DIRTY_LAYOUT | DIRTY_VIEW; composerChanged = true }
         continue
       }
-      if (record.attributeName === 'hidden' || record.attributeName === 'aria-label') flags |= DIRTY_DOM | DIRTY_VIEW
+      if (record.attributeName === 'hidden' || record.attributeName === 'aria-label' || record.attributeName === 'disabled') flags |= DIRTY_DOM | DIRTY_VIEW
       else if (record.attributeName === 'aria-current' || record.attributeName === 'aria-busy') flags |= DIRTY_NATIVE_STATE | DIRTY_VIEW
     }
-    if (composerChanged) syncComposerSeat()
     if (flags !== 0) schedule(flags)
   })
-  dom.observe(local, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy'] })
+  dom.observe(local, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy', 'disabled'] })
+  composerDom = new MutationObserver(records => {
+    if (!records.some(record => [...record.addedNodes, ...record.removedNodes].some(touchesComposer))) return
+    syncComposerSeat()
+    schedule(DIRTY_LAYOUT | DIRTY_VIEW)
+  })
+  observeComposerParent()
   resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => schedule(DIRTY_LAYOUT | DIRTY_VIEW))
   resize?.observe(root); resize?.observe(flow); resize?.observe(scrollport)
   if (composerSeat !== null) resize?.observe(composerSeat)
@@ -658,7 +705,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (!alive) return
     alive = false; activation++; landing.cancel()
     if (binding?.session.sessionId === ctx.sessions.list.getSnapshot().current) owner.cancel()
-    owner.release(); sourceStop?.(); listStop(); settingsStop(); dom.disconnect(); resize?.disconnect()
+    owner.release(); sourceStop?.(); listStop(); settingsStop(); dom.disconnect(); composerDom?.disconnect(); resize?.disconnect()
     if (retry !== undefined) clearTimeout(retry)
     clearStreamRefresh(true)
     if (frame !== 0) window.cancelAnimationFrame(frame)
