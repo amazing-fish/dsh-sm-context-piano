@@ -60,7 +60,7 @@ export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKe
     let node: HTMLElement | null = flow
     while (node !== null) {
       observer.observe(node, { attributes: true, attributeFilter: ['hidden'] })
-      const parent = node.parentElement
+      const parent: HTMLElement | null = node.parentElement
       if (parent !== null) observer.observe(parent, { childList: true })
       if (node === document.body) break
       node = parent
