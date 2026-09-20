@@ -206,6 +206,20 @@ await check('keyed-only streaming refreshes visible text', async () => {
   sources.get('a1').emit(); await frame()
   assert.match(document.querySelector('.smcp-tooltip').textContent, /fresh stream/)
 })
+await check('continuous keyed streaming throttles full semantic rebuilds', async () => {
+  const before = globalThis.__smcpDebug.perf.nodeRebuilds
+  for (let index = 0; index < 12; index++) {
+    map.get('a1').data.blocks[0].text = `stream burst ${index}`
+    sources.get('a1').emit()
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  await new Promise(resolve => setTimeout(resolve, 160))
+  await frame()
+  const rebuilt = globalThis.__smcpDebug.perf.nodeRebuilds - before
+  assert.ok(rebuilt <= 3, `expected <= 3 semantic rebuilds for token burst, got ${rebuilt}`)
+  assert.match(document.querySelector('.smcp-tooltip').textContent, /stream burst 11/)
+})
+
 await check('contract drift restores official UI and hides Piano, never both', async () => {
   nativeButton(3).setAttribute('aria-label', 'changed-contract'); await frame()
   assert.equal(piano().hidden, true)
