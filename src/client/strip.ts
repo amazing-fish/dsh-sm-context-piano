@@ -201,16 +201,18 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       }
     })
   }
-  const clearStreamRefresh = (): void => {
+  const clearStreamRefresh = (discardDirty = false): void => {
     if (streamRefresh !== undefined) window.clearTimeout(streamRefresh)
     streamRefresh = undefined
+    if (discardDirty) keyedDirtyKeys.clear()
   }
-  const scheduleKeyedSemantic = (): void => {
+  const scheduleKeyedSemantic = (keys: readonly string[]): void => {
+    for (const key of keys) keyedDirtyKeys.add(key)
     const now = window.performance.now()
     const wait = STREAM_SEMANTIC_MIN_INTERVAL_MS - (now - lastStreamSemanticAt)
     if (wait <= 0) {
       lastStreamSemanticAt = now
-      schedule(DIRTY_NODES | DIRTY_VIEW)
+      schedule(DIRTY_KEYED_NODES | DIRTY_VIEW)
       return
     }
     if (streamRefresh !== undefined) return
@@ -218,7 +220,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       streamRefresh = undefined
       if (!alive) return
       lastStreamSemanticAt = window.performance.now()
-      schedule(DIRTY_NODES | DIRTY_VIEW)
+      schedule(DIRTY_KEYED_NODES | DIRTY_VIEW)
     }, wait)
   }
   const readingKey = (): string | null => {
@@ -240,17 +242,129 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
         }
       }
     }
+    const preceding = owner.anchorAtOrBefore(line)
+    if (preceding !== null) {
+      const key = firstItemByAnchor.get(preceding)
+      if (key !== undefined) return key
+    }
     return nativeActiveTurn === null ? null : itemByKey.has(`turn:${nativeActiveTurn}`) ? `turn:${nativeActiveTurn}` : null
   }
+  const segmentAvailable = (segment: KeyDescriptor): boolean => owner.rowFor(segment.anchorKey) !== null
+    || ((segment.kind === 'question' || segment.kind === 'answer') && landing.canReveal(segment.anchorKey))
   const rebuildItemIndex = (): void => {
     itemByKey = new Map()
     itemIndexByKey = new Map()
     firstItemByAnchor = new Map()
+    turnItemRanges = new Map()
     items.forEach((item, index) => {
       itemByKey.set(item.key, item)
       itemIndexByKey.set(item.key, index)
       if (item.anchorKey !== null && !firstItemByAnchor.has(item.anchorKey)) firstItemByAnchor.set(item.anchorKey, item.key)
+      const range = turnItemRanges.get(item.turn)
+      if (range === undefined) turnItemRanges.set(item.turn, { start: index, count: 1 })
+      else range.count++
     })
+  }
+  const rebuildSemanticState = (): void => {
+    keyedDirtyKeys.clear()
+    questionKeys = buildQuestionKeys(nodes, turnOf)
+    segments = buildNavigationNodesWithQuestions(nodes, questionKeys)
+    nodeByKey = new Map()
+    nodeIndexByKey = new Map()
+    turnKeys = new Map()
+    nodes.forEach((node, index) => {
+      nodeByKey.set(node.key, node)
+      nodeIndexByKey.set(node.key, index)
+      const turn = turnOf(node)
+      if (turn === null) return
+      const keys = turnKeys.get(turn) ?? []
+      keys.push(node.key)
+      turnKeys.set(turn, keys)
+    })
+    segmentsByTurn = new Map()
+    for (const segment of segments) {
+      if (segment.turn === null) continue
+      const list = segmentsByTurn.get(segment.turn) ?? []
+      list.push(segment)
+      segmentsByTurn.set(segment.turn, list)
+    }
+    perf.nodeRebuilds++
+  }
+  const rebuildItemsFromSegments = (): void => {
+    segments = [...segmentsByTurn.values()].flat()
+    const availableSegments = segments.filter(segmentAvailable)
+    items = buildPianoItems(turns, availableSegments, turn => copy('turn', turn))
+    rebuildItemIndex()
+    perf.itemRebuilds++
+    debug.total = items.length
+  }
+  const replaceTurnItems = (turn: number, nextItems: PianoItem[]): boolean => {
+    const range = turnItemRanges.get(turn)
+    if (range === undefined || range.count !== nextItems.length) return false
+    const previous = items.slice(range.start, range.start + range.count)
+    if (previous.some((item, index) => item.key !== nextItems[index]?.key)) return false
+    const oldKeys = new Set(previous.map(item => item.key))
+    for (const item of previous) {
+      if (item.anchorKey !== null && oldKeys.has(firstItemByAnchor.get(item.anchorKey) ?? '')) firstItemByAnchor.delete(item.anchorKey)
+    }
+    nextItems.forEach((item, offset) => {
+      const index = range.start + offset
+      items[index] = item
+      itemByKey.set(item.key, item)
+      itemIndexByKey.set(item.key, index)
+      if (item.anchorKey !== null && !firstItemByAnchor.has(item.anchorKey)) firstItemByAnchor.set(item.anchorKey, item.key)
+    })
+    return true
+  }
+  const refreshKeyedSemantic = (): void => {
+    const dirtyKeys = [...keyedDirtyKeys]
+    keyedDirtyKeys.clear()
+    if (dirtyKeys.length === 0) return
+    const dirtyTurns = new Set<number>()
+    let requiresFullSemantic = false
+    for (const key of dirtyKeys) {
+      const index = nodeIndexByKey.get(key)
+      const previous = nodeByKey.get(key)
+      const next = index === undefined ? undefined : nodes[index]
+      if (previous === undefined || next === undefined || next.key !== key || previous.kind !== next.kind
+        || previous.kind === 'tool-call' || next.kind === 'tool-call') {
+        requiresFullSemantic = true
+        break
+      }
+      const oldTurn = turnOf(previous)
+      const nextTurn = turnOf(next)
+      if (oldTurn !== nextTurn || nextTurn === null) {
+        requiresFullSemantic = true
+        break
+      }
+      nodeByKey.set(key, next)
+      dirtyTurns.add(nextTurn)
+    }
+    if (requiresFullSemantic) {
+      rebuildSemanticState()
+      rebuildItemsFromSegments()
+      return
+    }
+    let rebuildAllItems = false
+    for (const turn of dirtyTurns) {
+      const keys = turnKeys.get(turn)
+      const navigationTurn = turnByNumber.get(turn)
+      if (keys === undefined || navigationTurn === undefined) {
+        rebuildAllItems = true
+        continue
+      }
+      const turnNodes = keys.flatMap(key => {
+        const node = nodeByKey.get(key)
+        return node === undefined ? [] : [node]
+      })
+      const nextSegments = buildNavigationNodesWithQuestions(turnNodes, questionKeys)
+      segmentsByTurn.set(turn, nextSegments)
+      const nextItems = buildPianoItemsForTurn(navigationTurn, nextSegments.filter(segmentAvailable), value => copy('turn', value))
+      if (!replaceTurnItems(turn, nextItems)) rebuildAllItems = true
+      perf.keyedSemanticUpdates++
+    }
+    if (rebuildAllItems) rebuildItemsFromSegments()
+    else debug.total = items.length
   }
   const render = (pending: number): void => {
     perf.renders++
@@ -259,24 +373,17 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       const loaded = snapshot?.navigation.items() ?? []
       const outline = binding?.session.projections.faceOf('turnOutline').getSnapshot()
       turns = mergeNavigationTurns(loaded, outline)
+      turnByNumber = new Map(turns.map(turn => [turn.turn, turn]))
       perf.turnRebuilds++
     }
-    if ((pending & DIRTY_NODES) !== 0) {
-      segments = buildNavigationNodes(nodes)
-      perf.nodeRebuilds++
-    }
+    if ((pending & DIRTY_NODES) !== 0) rebuildSemanticState()
+    else if ((pending & DIRTY_KEYED_NODES) !== 0) refreshKeyedSemantic()
     if ((pending & (DIRTY_DOM | DIRTY_TURNS)) !== 0) {
       nativeReady = owner.reconcile(turns)
       if ((pending & DIRTY_DOM) !== 0) landing.refresh()
       perf.domReconciles++
     }
-    if ((pending & (DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM)) !== 0) {
-      const availableSegments = segments.filter(segment => owner.rowFor(segment.anchorKey) !== null
-        || ((segment.kind === 'question' || segment.kind === 'answer') && landing.canReveal(segment.anchorKey)))
-      items = buildPianoItems(turns, availableSegments, turn => copy('turn', turn))
-      rebuildItemIndex()
-      debug.total = items.length
-    }
+    if ((pending & (DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM)) !== 0) rebuildItemsFromSegments()
     if ((pending & (DIRTY_NATIVE_STATE | DIRTY_DOM | DIRTY_TURNS)) !== 0) {
       busyTurn = owner.busy()
       nativeActiveTurn = owner.active()
@@ -347,14 +454,14 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     const focused = focusIndex < 0 ? undefined : visibleItems[focusIndex]
     if (focused !== undefined) {
       const previewChanged = tooltipKey !== focused.key
-      const contentChanged = previewChanged || (pending & (DIRTY_NODES | DIRTY_TURNS)) !== 0
+      const contentChanged = previewChanged || (pending & (DIRTY_NODES | DIRTY_KEYED_NODES | DIRTY_TURNS)) !== 0
       if (contentChanged) {
         tooltipKey = focused.key
         badge.textContent = semanticLabel(focused, config.language)
         title.textContent = focused.title
         body.textContent = focused.preview
       }
-      if (previewChanged || (pending & DIRTY_LAYOUT) !== 0) {
+      if (contentChanged || (pending & DIRTY_LAYOUT) !== 0) {
         tooltip.style.left = `${Math.max(8, Math.min(left + 64, width - (tooltip.offsetWidth || 400) - 8))}px`
         tooltip.style.top = `${Math.max(8, Math.min(top + visiblePositions[focusIndex] - 48, root.clientHeight - (tooltip.offsetHeight || 150) - 8))}px`
       }
