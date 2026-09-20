@@ -163,6 +163,26 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   const buttons = new Map<string, HTMLButtonElement>()
   const perf = { renders: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, mappedAnchorRebuilds: 0, hitTests: 0, barWrites: 0 }
   const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', perf }
+  const writeData = (button: HTMLButtonElement, name: string, value: string): void => {
+    if (button.dataset[name] === value) return
+    button.dataset[name] = value
+    perf.barWrites++
+  }
+  const writeAttr = (button: HTMLButtonElement, name: string, value: string): void => {
+    if (button.getAttribute(name) === value) return
+    button.setAttribute(name, value)
+    perf.barWrites++
+  }
+  const writeStyle = (button: HTMLButtonElement, name: 'top' | 'height' | 'width', value: string): void => {
+    if (button.style[name] === value) return
+    button.style[name] = value
+    perf.barWrites++
+  }
+  const writeClass = (button: HTMLButtonElement, name: string, enabled: boolean): void => {
+    if (button.classList.contains(name) === enabled) return
+    button.classList.toggle(name, enabled)
+    perf.barWrites++
+  }
   const debugHost = globalThis as unknown as { __smcpDebug?: typeof debug }
   debugHost.__smcpDebug = debug
 
@@ -454,35 +474,20 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
         button.id = prefix + encodeURIComponent(item.key)
         buttons.set(item.key, button); strip.append(button)
       }
-      const writeData = (name: string, value: string): void => {
-        if (button!.dataset[name] === value) return
-        button!.dataset[name] = value
-        perf.barWrites++
-      }
-      const writeAttr = (name: string, value: string): void => {
-        if (button!.getAttribute(name) === value) return
-        button!.setAttribute(name, value)
-        perf.barWrites++
-      }
-      const writeStyle = (name: 'top' | 'height' | 'width', value: string): void => {
-        if (button!.style[name] === value) return
-        button!.style[name] = value
-        perf.barWrites++
-      }
-      writeData('turn', String(item.turn))
-      writeData('role', item.role)
-      writeData('kind', item.kind ?? 'turn')
-      writeData('unloaded', String(item.anchorKey === null))
-      writeAttr('aria-label', `${copy('turn', item.turn)} · ${semanticLabel(item, config.language)}: ${item.title}`)
-      writeAttr('aria-current', String(item.key === active))
-      writeAttr('aria-busy', String(item.turn === busyTurn))
-      button.classList.toggle('smcp-bar-current', item.key === active)
-      button.classList.toggle('smcp-bar-hover', item.key === selected)
-      writeStyle('top', `${visiblePositions[index] - config.keyHeight / 2}px`)
-      writeStyle('height', `${config.keyHeight}px`)
+      writeData(button, 'turn', String(item.turn))
+      writeData(button, 'role', item.role)
+      writeData(button, 'kind', item.kind ?? 'turn')
+      writeData(button, 'unloaded', String(item.anchorKey === null))
+      writeAttr(button, 'aria-label', `${copy('turn', item.turn)} · ${semanticLabel(item, config.language)}: ${item.title}`)
+      writeAttr(button, 'aria-current', String(item.key === active))
+      writeAttr(button, 'aria-busy', String(item.turn === busyTurn))
+      writeClass(button, 'smcp-bar-current', item.key === active)
+      writeClass(button, 'smcp-bar-hover', item.key === selected)
+      writeStyle(button, 'top', `${visiblePositions[index] - config.keyHeight / 2}px`)
+      writeStyle(button, 'height', `${config.keyHeight}px`)
       const base = item.key === active ? 24 : 10
       const wave = focusIndex < 0 ? 0 : Math.exp(-((index - focusIndex) ** 2) / (2 * 1.35 ** 2))
-      writeStyle('width', `${base + (48 - base) * wave}px`)
+      writeStyle(button, 'width', `${base + (48 - base) * wave}px`)
     })
     const focused = focusIndex < 0 ? undefined : visibleItems[focusIndex]
     if (focused !== undefined) {
