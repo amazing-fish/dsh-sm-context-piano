@@ -365,6 +365,10 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (next === binding && sourceStop !== undefined) return
     sourceStop?.(); sourceStop = undefined
     clearStreamRefresh()
+    // Retire any native delayed landing while the old binding still owns the
+    // real TurnNavigator. Relying on the outgoing ChatView to unmount first is
+    // timing-sensitive when sessions switch during an in-flight history load.
+    owner.cancel()
     fallback('binding')
     binding = next; nodes = []; selected = active = browseStart = null
     requestedTurn = failedTurn = null; localFailure = false
