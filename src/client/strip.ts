@@ -134,6 +134,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let frame = 0
   let dirty = DIRTY_ALL
   let binding: SessionBinding | undefined
+  let sessionLoadingOlder = false
   let sourceStop: (() => void) | undefined
   let retry: ReturnType<typeof setTimeout> | undefined
   let streamRefresh: ReturnType<typeof setTimeout> | undefined
@@ -459,7 +460,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       return
     }
     const config = settings.getSnapshot()
-    const loadedBusy = binding?.session.getSnapshot().loadingOlder ?? false
+    const loadedBusy = sessionLoadingOlder
     if (requestedTurn !== null && busyTurn === null && !loadedBusy) {
       const destination = turns.find(turn => turn.turn === requestedTurn)
       failedTurn = destination?.anchor.kind === 'unloaded' ? requestedTurn : null
@@ -545,6 +546,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     owner.cancel()
     fallback('binding')
     binding = next; nodes = []; selected = active = browseStart = null
+    sessionLoadingOlder = next?.session.getSnapshot().loadingOlder ?? false
     requestedTurn = failedTurn = null; localFailure = false
     debug.sessionId = id === undefined ? undefined : String(id)
     if (retry !== undefined) clearTimeout(retry)
@@ -574,7 +576,13 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
         schedule(DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW)
       }))
       stops.push(next.session.projections.faceOf('turnOutline').subscribe(() => schedule(DIRTY_TURNS | DIRTY_NATIVE_STATE | DIRTY_VIEW)))
-      stops.push(next.session.subscribe(() => schedule(DIRTY_NATIVE_STATE | DIRTY_VIEW)))
+      sessionLoadingOlder = next.session.getSnapshot().loadingOlder ?? false
+      stops.push(next.session.subscribe(() => {
+        const nextLoadingOlder = next.session.getSnapshot().loadingOlder ?? false
+        if (nextLoadingOlder === sessionLoadingOlder) return
+        sessionLoadingOlder = nextLoadingOlder
+        schedule(DIRTY_NATIVE_STATE | DIRTY_VIEW)
+      }))
       sourceStop = () => { for (const dispose of stops) dispose() }
     } catch (error) {
       for (const dispose of stops.reverse()) dispose()
