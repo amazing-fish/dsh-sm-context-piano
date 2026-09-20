@@ -451,16 +451,26 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (!pointerInside && document.activeElement !== strip) browseStart = null
     schedule(DIRTY_VIEW)
   }
+  const touchesAnchor = (node: Node): boolean => node instanceof Element
+    && (node.matches('[data-chat-anchor-key]') || node.querySelector('[data-chat-anchor-key]') !== null)
+  const childListChangesNavigation = (record: MutationRecord): boolean => {
+    const target = record.target instanceof Element ? record.target : record.target.parentElement
+    if (target?.closest('nav,[role="navigation"]') !== null && !flow.contains(target)) return true
+    for (const node of record.addedNodes) if (touchesAnchor(node)) return true
+    for (const node of record.removedNodes) if (touchesAnchor(node)) return true
+    return false
+  }
   const dom = new MutationObserver(records => {
-    let flags = DIRTY_VIEW
+    let flags = 0
     for (const record of records) {
-      if (record.type === 'childList' || record.attributeName === 'hidden' || record.attributeName === 'aria-label') {
-        flags |= DIRTY_DOM
-        break
+      if (record.type === 'childList') {
+        if (childListChangesNavigation(record)) flags |= DIRTY_DOM | DIRTY_VIEW
+        continue
       }
-      if (record.attributeName === 'aria-current' || record.attributeName === 'aria-busy') flags |= DIRTY_NATIVE_STATE
+      if (record.attributeName === 'hidden' || record.attributeName === 'aria-label') flags |= DIRTY_DOM | DIRTY_VIEW
+      else if (record.attributeName === 'aria-current' || record.attributeName === 'aria-busy') flags |= DIRTY_NATIVE_STATE | DIRTY_VIEW
     }
-    schedule(flags)
+    if (flags !== 0) schedule(flags)
   })
   dom.observe(local, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy'] })
   const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => schedule(DIRTY_LAYOUT | DIRTY_VIEW))
