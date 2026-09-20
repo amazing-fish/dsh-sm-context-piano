@@ -107,7 +107,7 @@ try {
     await page.waitForFunction(() => document.querySelectorAll('.smcp-bar[data-kind="output"]').length > 0)
     const input = key('input').first(), output = key('output', 1).first(), answer = key('answer').first()
     const question = key('question').first(), final = key('final').first()
-    const rgb = value => (value.match(/[\\d.]+/g) ?? []).slice(0, 3).map(Number)
+    const rgb = value => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
     const neutral = ([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) <= 32
     const blue = ([r, g, b]) => b > g && g > r
     const green = ([r, g, b]) => g > r && g > b
