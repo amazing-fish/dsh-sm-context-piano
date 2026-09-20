@@ -37,6 +37,7 @@ const DIRTY_LAYOUT = 1 << 3
 const DIRTY_NATIVE_STATE = 1 << 4
 const DIRTY_VIEW = 1 << 5
 const DIRTY_ALL = DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW
+const STREAM_SEMANTIC_MIN_INTERVAL_MS = 120
 
 /** Attach to the visible ChatView, never to a background/hidden conversation. */
 export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKey>, settings: PianoSettingsSource = DEFAULT_SETTINGS_SOURCE): () => void {
@@ -114,6 +115,8 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let binding: SessionBinding | undefined
   let sourceStop: (() => void) | undefined
   let retry: ReturnType<typeof setTimeout> | undefined
+  let streamRefresh: ReturnType<typeof setTimeout> | undefined
+  let lastStreamSemanticAt = Number.NEGATIVE_INFINITY
   let retries = 0
   let nodes: readonly ChatConversationViewNode[] = []
   let turns: NavigationTurn[] = []
@@ -187,6 +190,26 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
         if (!warned) { warned = true; console.warn('[dsh-sm-context-piano] navigator contract changed; native UI restored') }
       }
     })
+  }
+  const clearStreamRefresh = (): void => {
+    if (streamRefresh !== undefined) window.clearTimeout(streamRefresh)
+    streamRefresh = undefined
+  }
+  const scheduleKeyedSemantic = (): void => {
+    const now = window.performance.now()
+    const wait = STREAM_SEMANTIC_MIN_INTERVAL_MS - (now - lastStreamSemanticAt)
+    if (wait <= 0) {
+      lastStreamSemanticAt = now
+      schedule(DIRTY_NODES | DIRTY_VIEW)
+      return
+    }
+    if (streamRefresh !== undefined) return
+    streamRefresh = window.setTimeout(() => {
+      streamRefresh = undefined
+      if (!alive) return
+      lastStreamSemanticAt = window.performance.now()
+      schedule(DIRTY_NODES | DIRTY_VIEW)
+    }, wait)
   }
   const readingKey = (): string | null => {
     perf.hitTests++
@@ -341,6 +364,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     const next = id === undefined ? undefined : ctx.sessions.binding(id)
     if (next === binding && sourceStop !== undefined) return
     sourceStop?.(); sourceStop = undefined
+    clearStreamRefresh()
     fallback('binding')
     binding = next; nodes = []; selected = active = browseStart = null
     requestedTurn = failedTurn = null; localFailure = false
@@ -362,9 +386,13 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       stops.push(observeChatNodes(target, (value, change) => {
         if (!alive || binding !== next) return
         nodes = value
-        schedule(change === 'keyed'
-          ? DIRTY_NODES | DIRTY_VIEW
-          : DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW)
+        if (change === 'keyed') {
+          scheduleKeyedSemantic()
+          return
+        }
+        clearStreamRefresh()
+        lastStreamSemanticAt = window.performance.now()
+        schedule(DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW)
       }))
       stops.push(next.session.projections.faceOf('turnOutline').subscribe(() => schedule(DIRTY_TURNS | DIRTY_NATIVE_STATE | DIRTY_VIEW)))
       stops.push(next.session.subscribe(() => schedule(DIRTY_NATIVE_STATE | DIRTY_VIEW)))
@@ -488,6 +516,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (binding?.session.sessionId === ctx.sessions.list.getSnapshot().current) owner.cancel()
     owner.release(); sourceStop?.(); listStop(); settingsStop(); dom.disconnect(); resize?.disconnect()
     if (retry !== undefined) clearTimeout(retry)
+    clearStreamRefresh()
     if (frame !== 0) window.cancelAnimationFrame(frame)
     scrollport.removeEventListener('scroll', onScroll); scrollport.removeEventListener('wheel', cancel)
     scrollport.removeEventListener('touchstart', readerPointer); scrollport.removeEventListener('pointerdown', readerPointer)
