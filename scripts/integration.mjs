@@ -196,6 +196,27 @@ await check('scroll hot path skips model rebuilds and DOM reconciliation', async
   assert.ok(after.renders - before.renders <= 2)
 })
 
+await check('scroll frames inside one semantic segment early-exit before Piano DOM rendering', async () => {
+  scroll.scrollTop = 1600
+  scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+  assert.equal(document.querySelector('.smcp-bar[aria-current="true"]')?.dataset.key, 'segment:a8::output:0')
+  const before = { ...globalThis.__smcpDebug.perf }
+  for (let index = 1; index <= 8; index++) {
+    scroll.scrollTop = 1600 + index
+    scroll.dispatchEvent(new window.Event('scroll'))
+    await frame()
+  }
+  const after = globalThis.__smcpDebug.perf
+  assert.ok(after.readerSkips - before.readerSkips >= 8)
+  assert.equal(after.barWrites, before.barWrites)
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds)
+  assert.equal(after.domReconciles, before.domReconciles)
+  scroll.scrollTop = 0
+  scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+})
+
 await check('message-body DOM churn does not rebuild navigation indexes', async () => {
   const before = { ...globalThis.__smcpDebug.perf }
   const row = flow.querySelector('[data-chat-anchor-key="a8"]')
