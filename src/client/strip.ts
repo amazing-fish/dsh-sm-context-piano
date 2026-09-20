@@ -264,6 +264,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       if (range === undefined) turnItemRanges.set(item.turn, { start: index, count: 1 })
       else range.count++
     })
+    owner.setMappedAnchors(firstItemByAnchor.keys())
   }
   const rebuildSemanticState = (): void => {
     keyedDirtyKeys.clear()
@@ -314,6 +315,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       itemIndexByKey.set(item.key, index)
       if (item.anchorKey !== null && !firstItemByAnchor.has(item.anchorKey)) firstItemByAnchor.set(item.anchorKey, item.key)
     })
+    owner.setMappedAnchors(firstItemByAnchor.keys())
     return true
   }
   const refreshKeyedSemantic = (): void => {
