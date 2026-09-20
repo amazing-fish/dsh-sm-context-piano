@@ -13,6 +13,22 @@ export const SEMANTIC_CSS = `
   --smcp-key-active: var(--smcp-assistant-active-color, #6d28d9);
   color: var(--smcp-key);
 }
+/* Semantic kinds override the broad speaker palette where meaning is more useful. */
+.smcp-unified .smcp-bar[data-kind="output"] {
+  --smcp-key: var(--smcp-output-color, #cbd5e1);
+  --smcp-key-active: var(--smcp-output-active-color, #94a3b8);
+  color: var(--smcp-key);
+}
+.smcp-unified .smcp-bar[data-kind="answer"] {
+  --smcp-key: var(--smcp-answer-color, #22c55e);
+  --smcp-key-active: var(--smcp-answer-active-color, #16a34a);
+  color: var(--smcp-key);
+}
+.smcp-unified .smcp-bar[data-kind="question"] {
+  --smcp-key: var(--smcp-question-color, #f59e0b);
+  --smcp-key-active: var(--smcp-question-active-color, #d97706);
+  color: var(--smcp-key);
+}
 body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-role="user"] {
   --smcp-key: var(--smcp-user-color, #60a5fa);
   --smcp-key-active: var(--smcp-user-active-color, #93c5fd);
@@ -20,6 +36,18 @@ body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-role="user"] {
 body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-role="assistant"] {
   --smcp-key: var(--smcp-assistant-color, #a78bfa);
   --smcp-key-active: var(--smcp-assistant-active-color, #c4b5fd);
+}
+body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-kind="output"] {
+  --smcp-key: var(--smcp-output-color, #e2e8f0);
+  --smcp-key-active: var(--smcp-output-active-color, #ffffff);
+}
+body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-kind="answer"] {
+  --smcp-key: var(--smcp-answer-color, #4ade80);
+  --smcp-key-active: var(--smcp-answer-active-color, #86efac);
+}
+body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-kind="question"] {
+  --smcp-key: var(--smcp-question-color, #fbbf24);
+  --smcp-key-active: var(--smcp-question-active-color, #fde68a);
 }
 body[data-ds-dark-theme] .smcp-tooltip,
 body[data-ds-dark-theme] .smcp-tooltip-title,
