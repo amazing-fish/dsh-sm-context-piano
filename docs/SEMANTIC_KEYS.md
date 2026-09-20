@@ -30,7 +30,7 @@ Colour follows the navigation meaning rather than only the speaker:
 | AI question | amber | amber | interactive question / attention point |
 | AI final result | purple | purple | completed result |
 
-The light-theme ordinary-output key is intentionally light gray rather than literal white so it does not disappear on a white transcript. In the dark theme it is white/near-white, matching the desired normal-output appearance. Active and hover states keep the same semantic family instead of collapsing to one generic colour.
+The light-theme ordinary-output key is intentionally medium neutral gray rather than literal white so it does not disappear on a white transcript. In the dark theme it is white/near-white, matching the desired normal-output appearance. Output/question/answer semantic overrides render at full opacity so their intended colours are not washed out by the base rail opacity; browser tests assert the final painted contrast is at least 3:1 in both themes. Active and hover states keep the same semantic family instead of collapsing to one generic colour.
 
 Final keys keep a second stroke; question/answer keys keep square ends. Hover and accessible names include explicit role/kind/state labels in zh/en/zh-TW, so meaning is never conveyed only by colour. Unknown/unloaded Turn placeholders stay neutral rather than pretending to know internal roles.
 
