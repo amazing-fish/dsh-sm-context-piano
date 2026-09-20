@@ -46,7 +46,9 @@ export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKe
   let disposed = false
   const reconcile = (): void => {
     if (disposed) return
-    const next = settings.getSnapshot().enabled
+    const enabled = settings.getSnapshot().enabled
+    if (enabled && flow?.isConnected === true && flow.closest('[hidden]') === null) return
+    const next = enabled
       ? [...document.querySelectorAll<HTMLElement>('[data-chat-flow]')].find(el => el.closest('[hidden]') === null)
       : undefined
     if (next === flow) return
@@ -196,7 +198,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       const ys = [line, line - 8, line + 8]
       for (const y of ys) for (const x of xs) {
         for (const element of hitTest(x, y)) {
-          const row = element.closest<HTMLElement>?.('[data-chat-anchor-key]') ?? null
+          const row = (element as HTMLElement).closest<HTMLElement>('[data-chat-anchor-key]')
           if (row === null || !flow.contains(row) || row.closest('[hidden]') !== null) continue
           const anchor = row.dataset.chatAnchorKey
           if (anchor === undefined) continue
