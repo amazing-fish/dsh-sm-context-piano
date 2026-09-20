@@ -314,7 +314,8 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     const focused = focusIndex < 0 ? undefined : visibleItems[focusIndex]
     if (focused !== undefined) {
       const previewChanged = tooltipKey !== focused.key
-      if (previewChanged) {
+      const contentChanged = previewChanged || (pending & (DIRTY_NODES | DIRTY_TURNS)) !== 0
+      if (contentChanged) {
         tooltipKey = focused.key
         badge.textContent = semanticLabel(focused, config.language)
         title.textContent = focused.title
