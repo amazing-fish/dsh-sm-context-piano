@@ -237,16 +237,19 @@ await check('reader wheel cancels a pending native landing', async () => {
   scroll.dispatchEvent(new window.WheelEvent('wheel', { deltaY: 100 })); await frame()
   assert.equal(pending, null)
 })
-await check('keyed-only streaming refreshes visible text without a full semantic rebuild', async () => {
+await check('keyed-only streaming refreshes text and repositions the same tooltip without full rebuilds', async () => {
   await press('Home'); await press('ArrowDown')
   const before = { ...globalThis.__smcpDebug.perf }
-  map.get('a1').data.blocks[0].text = 'fresh stream'
+  const tooltip = document.querySelector('.smcp-tooltip')
+  tooltip.style.top = '777px'
+  map.get('a1').data.blocks[0].text = 'fresh stream with a longer preview that changes tooltip geometry'
   sources.get('a1').emit(); await frame(); await new Promise(resolve => setTimeout(resolve, 140)); await frame()
   const after = globalThis.__smcpDebug.perf
   assert.equal(after.nodeRebuilds, before.nodeRebuilds)
   assert.ok(after.keyedSemanticUpdates > before.keyedSemanticUpdates)
   assert.equal(after.itemRebuilds, before.itemRebuilds)
-  assert.match(document.querySelector('.smcp-tooltip').textContent, /fresh stream/)
+  assert.match(tooltip.textContent, /fresh stream/)
+  assert.notEqual(tooltip.style.top, '777px')
 })
 await check('continuous keyed streaming stays turn-local and throttled', async () => {
   const before = { ...globalThis.__smcpDebug.perf }
