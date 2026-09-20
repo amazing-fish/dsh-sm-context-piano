@@ -132,6 +132,32 @@ await check('exactly one visible and accessible rail; native component stays mou
   assert.equal(native.getAttribute('aria-hidden'), 'true')
   assert.equal(native.querySelectorAll('button').length, 10)
 })
+await check('native navigation replacement is detected and re-owned without double rails', async () => {
+  const replacement = native.cloneNode(true)
+  native.replaceWith(replacement)
+  await frame()
+  assert.equal(piano().hidden, false)
+  assert.equal(replacement.style.getPropertyValue('display'), 'none')
+  assert.equal(replacement.getAttribute('aria-hidden'), 'true')
+  replacement.replaceWith(native)
+  await frame()
+  assert.equal(piano().hidden, false)
+  assert.equal(native.style.getPropertyValue('display'), 'none')
+  assert.equal(native.getAttribute('aria-hidden'), 'true')
+})
+
+await check('native disabled-state drift fails open and reclaims after recovery', async () => {
+  nativeButton(3).disabled = true
+  await frame()
+  assert.equal(piano().hidden, true)
+  assert.equal(native.style.display, '')
+  assert.equal(native.hasAttribute('aria-hidden'), false)
+  nativeButton(3).disabled = false
+  await frame()
+  assert.equal(piano().hidden, false)
+  assert.equal(native.style.getPropertyValue('display'), 'none')
+})
+
 await check('scroll hot path skips model rebuilds and DOM reconciliation', async () => {
   const before = { ...globalThis.__smcpDebug.perf }
   for (let index = 0; index < 100; index++) scroll.dispatchEvent(new window.Event('scroll'))
@@ -140,6 +166,8 @@ await check('scroll hot path skips model rebuilds and DOM reconciliation', async
   assert.equal(after.nodeRebuilds, before.nodeRebuilds)
   assert.equal(after.turnRebuilds, before.turnRebuilds)
   assert.equal(after.domReconciles, before.domReconciles)
+  assert.equal(after.mappedAnchorRebuilds, before.mappedAnchorRebuilds)
+  assert.equal(after.barWrites, before.barWrites)
   assert.ok(after.renders - before.renders <= 2)
 })
 
@@ -179,6 +207,20 @@ await check('composer autosize invalidates cached rail layout', async () => {
   assert.ok(after < before - 50, `composer growth should move rail up: ${before} -> ${after}`)
   composerHeight = 0
   await triggerResize(composer)
+  assert.ok(Math.abs(Number.parseFloat(piano().style.top) - before) < 1)
+})
+
+await check('composer replacement as a scrollport sibling invalidates cached layout', async () => {
+  const before = Number.parseFloat(piano().style.top)
+  const replacement = document.createElement('div')
+  replacement.dataset.composerSeat = ''
+  Object.defineProperty(replacement, 'offsetHeight', { get: () => 220 })
+  composer.replaceWith(replacement)
+  await frame()
+  const moved = Number.parseFloat(piano().style.top)
+  assert.ok(moved < before - 40, `replacement composer should move rail up: ${before} -> ${moved}`)
+  replacement.replaceWith(composer)
+  await frame()
   assert.ok(Math.abs(Number.parseFloat(piano().style.top) - before) < 1)
 })
 
@@ -256,6 +298,7 @@ await check('keyed-only streaming refreshes text and repositions the same toolti
   assert.equal(after.nodeRebuilds, before.nodeRebuilds)
   assert.ok(after.keyedSemanticUpdates > before.keyedSemanticUpdates)
   assert.equal(after.itemRebuilds, before.itemRebuilds)
+  assert.equal(after.mappedAnchorRebuilds, before.mappedAnchorRebuilds)
   assert.match(tooltip.textContent, /fresh stream/)
   assert.notEqual(tooltip.style.top, '777px')
 })
@@ -271,6 +314,7 @@ await check('continuous keyed streaming stays turn-local and throttled', async (
   const after = globalThis.__smcpDebug.perf
   assert.equal(after.nodeRebuilds, before.nodeRebuilds, 'token burst must not rebuild full transcript semantics')
   assert.equal(after.itemRebuilds, before.itemRebuilds, 'stable one-turn shape must not rebuild global items')
+  assert.equal(after.mappedAnchorRebuilds, before.mappedAnchorRebuilds, 'stable token burst must not refilter all transcript anchors')
   const keyed = after.keyedSemanticUpdates - before.keyedSemanticUpdates
   assert.ok(keyed >= 1 && keyed <= 3, `expected 1..3 turn-local semantic updates for burst, got ${keyed}`)
   assert.match(document.querySelector('.smcp-tooltip').textContent, /stream burst 11/)
