@@ -122,6 +122,21 @@ await check('scroll hot path skips model rebuilds and DOM reconciliation', async
   assert.ok(after.renders - before.renders <= 2)
 })
 
+await check('message-body DOM churn does not rebuild navigation indexes', async () => {
+  const before = { ...globalThis.__smcpDebug.perf }
+  const row = flow.querySelector('[data-chat-anchor-key="a8"]')
+  const span = document.createElement('span')
+  span.textContent = 'streamed markdown child'
+  row.append(span)
+  await frame()
+  const after = globalThis.__smcpDebug.perf
+  assert.equal(after.domReconciles, before.domReconciles)
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds)
+  span.remove()
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
+})
+
 await check('unloaded Turns appear without creating fake assistant segments', () => {
   assert.equal(globalThis.__smcpDebug.total, 13)
   assert.equal(key('turn:1').dataset.unloaded, 'true')
