@@ -15,8 +15,8 @@ export const SEMANTIC_CSS = `
 }
 /* Semantic kinds override the broad speaker palette where meaning is more useful. */
 .smcp-unified .smcp-bar[data-kind="output"] {
-  --smcp-key: var(--smcp-output-color, #cbd5e1);
-  --smcp-key-active: var(--smcp-output-active-color, #94a3b8);
+  --smcp-key: var(--smcp-output-color, #d4d4d4);
+  --smcp-key-active: var(--smcp-output-active-color, #a3a3a3);
   color: var(--smcp-key);
 }
 .smcp-unified .smcp-bar[data-kind="answer"] {
@@ -38,7 +38,7 @@ body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-role="assistant"] {
   --smcp-key-active: var(--smcp-assistant-active-color, #c4b5fd);
 }
 body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-kind="output"] {
-  --smcp-key: var(--smcp-output-color, #e2e8f0);
+  --smcp-key: var(--smcp-output-color, #e5e5e5);
   --smcp-key-active: var(--smcp-output-active-color, #ffffff);
 }
 body[data-ds-dark-theme] .smcp-unified .smcp-bar[data-kind="answer"] {
