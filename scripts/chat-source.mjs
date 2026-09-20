@@ -15,8 +15,9 @@ function observable(value) {
 function fixture(initialKeys = ['user:1', 'assistant:1']) {
   const map = new Map(initialKeys.map(key => [key, { key, kind: key.startsWith('user') ? 'user' : 'assistant', data: {} }]))
   const sources = new Map()
+  let getCount = 0
   const nodes = {
-    get: key => map.get(key),
+    get: key => { getCount++; return map.get(key) },
     source: key => {
       if (!sources.has(key)) sources.set(key, observable(map.get(key)))
       return sources.get(key)
@@ -28,6 +29,7 @@ function fixture(initialKeys = ['user:1', 'assistant:1']) {
   const stop = observeChatNodes(target, values => publications.push(values.map(node => ({ ...node }))), fn => tasks.push(fn))
   return {
     target, nodes, map, sources, tasks, publications, stop,
+    get getCount() { return getCount }, resetGetCount() { getCount = 0 },
     flush() { while (tasks.length) tasks.shift()() },
   }
 }
@@ -55,6 +57,18 @@ test('publishes keyed-only streaming changes with stable target identity', () =>
   f.flush()
   assert.equal(f.target.getSnapshot(), snapshot)
   assert.equal(f.publications.at(-1)[1].data.text, 'new content')
+  f.stop()
+})
+
+test('keyed streaming refresh reads only the changed node, not the full order', () => {
+  const keys = Array.from({ length: 1000 }, (_, index) => `assistant:${index}`)
+  const f = fixture(keys)
+  f.resetGetCount()
+  f.map.set('assistant:999', { key: 'assistant:999', kind: 'assistant', data: { text: 'tail update' } })
+  f.sources.get('assistant:999').emit()
+  f.flush()
+  assert.equal(f.getCount, 1)
+  assert.equal(f.publications.at(-1).at(-1).data.text, 'tail update')
   f.stop()
 })
 
