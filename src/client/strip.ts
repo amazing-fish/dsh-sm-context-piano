@@ -6,9 +6,10 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import { observeChatNodes } from './chat-source.ts'
-import { buildNavigationNodes } from './keys.ts'
+import { buildNavigationNodesWithQuestions, turnOf } from './keys.ts'
 import type { KeyDescriptor } from './keys.ts'
-import { buildPianoItems, mergeNavigationTurns } from './navigation-model.ts'
+import { buildQuestionKeys } from './question-keys.ts'
+import { buildPianoItems, buildPianoItemsForTurn, mergeNavigationTurns } from './navigation-model.ts'
 import type { NavigationTurn, PianoItem } from './navigation-model.ts'
 import { createNativeNavigation } from './native-navigation.ts'
 import { createSemanticLanding } from './semantic-landing.ts'
@@ -36,6 +37,7 @@ const DIRTY_DOM = 1 << 2
 const DIRTY_LAYOUT = 1 << 3
 const DIRTY_NATIVE_STATE = 1 << 4
 const DIRTY_VIEW = 1 << 5
+const DIRTY_KEYED_NODES = 1 << 6
 const DIRTY_ALL = DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW
 const STREAM_SEMANTIC_MIN_INTERVAL_MS = 120
 
@@ -121,6 +123,14 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let nodes: readonly ChatConversationViewNode[] = []
   let turns: NavigationTurn[] = []
   let segments: KeyDescriptor[] = []
+  let questionKeys: ReadonlyMap<string, KeyDescriptor[]> = new Map()
+  let nodeByKey = new Map<string, ChatConversationViewNode>()
+  let nodeIndexByKey = new Map<string, number>()
+  let turnKeys = new Map<number, string[]>()
+  let segmentsByTurn = new Map<number, KeyDescriptor[]>()
+  let turnByNumber = new Map<number, NavigationTurn>()
+  let turnItemRanges = new Map<number, { start: number; count: number }>()
+  const keyedDirtyKeys = new Set<string>()
   let items: PianoItem[] = []
   let itemByKey = new Map<string, PianoItem>()
   let itemIndexByKey = new Map<string, number>()
@@ -149,7 +159,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let visiblePositions: number[] = []
   let tooltipKey: string | null = null
   const buttons = new Map<string, HTMLButtonElement>()
-  const perf = { renders: 0, nodeRebuilds: 0, turnRebuilds: 0, domReconciles: 0, hitTests: 0 }
+  const perf = { renders: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, hitTests: 0 }
   const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', perf }
   const debugHost = globalThis as unknown as { __smcpDebug?: typeof debug }
   debugHost.__smcpDebug = debug
