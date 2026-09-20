@@ -394,7 +394,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       width = root.clientWidth || rootRect.width
       left = Math.max(16, flowLeft - 108)
       const config = settings.getSnapshot()
-      const available = Math.max(0, scrollport.clientHeight - (scrollport.querySelector<HTMLElement>('[data-composer-seat]')?.offsetHeight ?? 0))
+      const available = Math.max(0, scrollport.clientHeight - (composerSeat?.offsetHeight ?? 0))
       height = Math.min(railHeight(config), Math.max(config.keyHeight, available - 48))
       capacity = Math.min(config.maxVisible, Math.max(1, Math.floor((height - config.keyHeight) / config.keyGap) + 1))
       top = Math.max(8, (scrollport.getBoundingClientRect().top - rootRect.top) + (available - height) / 2)
@@ -481,7 +481,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     const next = id === undefined ? undefined : ctx.sessions.binding(id)
     if (next === binding && sourceStop !== undefined) return
     sourceStop?.(); sourceStop = undefined
-    clearStreamRefresh()
+    clearStreamRefresh(true)
     // Retire any native delayed landing while the old binding still owns the
     // real TurnNavigator. Relying on the outgoing ChatView to unmount first is
     // timing-sensitive when sessions switch during an in-flight history load.
@@ -494,6 +494,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     retry = undefined
     if (next === undefined) {
       turns = []; segments = []; items = []
+      questionKeys = new Map(); nodeByKey.clear(); nodeIndexByKey.clear(); turnKeys.clear(); segmentsByTurn.clear(); turnByNumber.clear(); turnItemRanges.clear()
       itemByKey.clear(); itemIndexByKey.clear(); firstItemByAnchor.clear()
       for (const button of buttons.values()) button.remove()
       buttons.clear()
@@ -504,14 +505,14 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     const target = ctx.uiConversation.binding(next).target('chat')
     const stops: (() => void)[] = []
     try {
-      stops.push(observeChatNodes(target, (value, change) => {
+      stops.push(observeChatNodes(target, (value, change, dirtyKeys) => {
         if (!alive || binding !== next) return
         nodes = value
         if (change === 'keyed') {
-          scheduleKeyedSemantic()
+          scheduleKeyedSemantic(dirtyKeys ?? [])
           return
         }
-        clearStreamRefresh()
+        clearStreamRefresh(true)
         lastStreamSemanticAt = window.performance.now()
         schedule(DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW)
       }))
@@ -600,8 +601,19 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (!pointerInside && document.activeElement !== strip) browseStart = null
     schedule(DIRTY_VIEW)
   }
+  let composerSeat = scrollport.querySelector<HTMLElement>('[data-composer-seat]')
+  let resize: ResizeObserver | null = null
   const touchesAnchor = (node: Node): boolean => node instanceof Element
     && (node.matches('[data-chat-anchor-key]') || node.querySelector('[data-chat-anchor-key]') !== null)
+  const touchesComposer = (node: Node): boolean => node instanceof Element
+    && (node.matches('[data-composer-seat]') || node.querySelector('[data-composer-seat]') !== null)
+  const syncComposerSeat = (): void => {
+    const next = scrollport.querySelector<HTMLElement>('[data-composer-seat]')
+    if (next === composerSeat) return
+    if (composerSeat !== null) resize?.unobserve(composerSeat)
+    composerSeat = next
+    if (composerSeat !== null) resize?.observe(composerSeat)
+  }
   const childListChangesNavigation = (record: MutationRecord): boolean => {
     const target = record.target instanceof Element ? record.target : record.target.parentElement
     if (target?.closest('nav,[role="navigation"]') !== null && !flow.contains(target)) return true
@@ -609,21 +621,30 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     for (const node of record.removedNodes) if (touchesAnchor(node)) return true
     return false
   }
+  const childListChangesComposer = (record: MutationRecord): boolean => {
+    for (const node of record.addedNodes) if (touchesComposer(node)) return true
+    for (const node of record.removedNodes) if (touchesComposer(node)) return true
+    return false
+  }
   const dom = new MutationObserver(records => {
     let flags = 0
+    let composerChanged = false
     for (const record of records) {
       if (record.type === 'childList') {
         if (childListChangesNavigation(record)) flags |= DIRTY_DOM | DIRTY_VIEW
+        if (childListChangesComposer(record)) { flags |= DIRTY_LAYOUT | DIRTY_VIEW; composerChanged = true }
         continue
       }
       if (record.attributeName === 'hidden' || record.attributeName === 'aria-label') flags |= DIRTY_DOM | DIRTY_VIEW
       else if (record.attributeName === 'aria-current' || record.attributeName === 'aria-busy') flags |= DIRTY_NATIVE_STATE | DIRTY_VIEW
     }
+    if (composerChanged) syncComposerSeat()
     if (flags !== 0) schedule(flags)
   })
   dom.observe(local, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy'] })
-  const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => schedule(DIRTY_LAYOUT | DIRTY_VIEW))
+  resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => schedule(DIRTY_LAYOUT | DIRTY_VIEW))
   resize?.observe(root); resize?.observe(flow); resize?.observe(scrollport)
+  if (composerSeat !== null) resize?.observe(composerSeat)
   strip.addEventListener('pointermove', pointerMove); strip.addEventListener('pointerleave', pointerLeave)
   strip.addEventListener('click', click); strip.addEventListener('wheel', wheel, { passive: false }); strip.addEventListener('keydown', keydown)
   scrollport.addEventListener('scroll', onScroll, { passive: true }); scrollport.addEventListener('wheel', cancel, { passive: true })
@@ -637,7 +658,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (binding?.session.sessionId === ctx.sessions.list.getSnapshot().current) owner.cancel()
     owner.release(); sourceStop?.(); listStop(); settingsStop(); dom.disconnect(); resize?.disconnect()
     if (retry !== undefined) clearTimeout(retry)
-    clearStreamRefresh()
+    clearStreamRefresh(true)
     if (frame !== 0) window.cancelAnimationFrame(frame)
     scrollport.removeEventListener('scroll', onScroll); scrollport.removeEventListener('wheel', cancel)
     scrollport.removeEventListener('touchstart', readerPointer); scrollport.removeEventListener('pointerdown', readerPointer)
