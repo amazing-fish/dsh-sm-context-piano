@@ -111,6 +111,17 @@ await check('exactly one visible and accessible rail; native component stays mou
   assert.equal(native.getAttribute('aria-hidden'), 'true')
   assert.equal(native.querySelectorAll('button').length, 10)
 })
+await check('scroll hot path skips model rebuilds and DOM reconciliation', async () => {
+  const before = { ...globalThis.__smcpDebug.perf }
+  for (let index = 0; index < 100; index++) scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+  const after = globalThis.__smcpDebug.perf
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds)
+  assert.equal(after.turnRebuilds, before.turnRebuilds)
+  assert.equal(after.domReconciles, before.domReconciles)
+  assert.ok(after.renders - before.renders <= 2)
+})
+
 await check('unloaded Turns appear without creating fake assistant segments', () => {
   assert.equal(globalThis.__smcpDebug.total, 13)
   assert.equal(key('turn:1').dataset.unloaded, 'true')
