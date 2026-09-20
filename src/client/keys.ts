@@ -107,9 +107,11 @@ function finalKeys(nodes: readonly ChatConversationViewNode[]): Set<string> {
   return new Set([...candidates.values()].filter(list => list.length === 1).map(list => list[0].key))
 }
 
-export function buildNavigationNodes(nodes: readonly ChatConversationViewNode[]): KeyDescriptor[] {
+export function buildNavigationNodesWithQuestions(
+  nodes: readonly ChatConversationViewNode[],
+  questions: ReadonlyMap<string, KeyDescriptor[]>,
+): KeyDescriptor[] {
   const finals = finalKeys(nodes)
-  const questions = buildQuestionKeys(nodes, turnOf)
   const result: KeyDescriptor[] = []
   let continuable: KeyDescriptor | null = null
   for (const node of nodes) {
@@ -149,4 +151,8 @@ export function buildNavigationNodes(nodes: readonly ChatConversationViewNode[])
     if (!output.endsWithText) continuable = null
   }
   return result
+}
+
+export function buildNavigationNodes(nodes: readonly ChatConversationViewNode[]): KeyDescriptor[] {
+  return buildNavigationNodesWithQuestions(nodes, buildQuestionKeys(nodes, turnOf))
 }
