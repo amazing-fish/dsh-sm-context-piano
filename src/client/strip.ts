@@ -47,6 +47,25 @@ export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKe
   let flow: HTMLElement | undefined
   let stop: (() => void) | undefined
   let disposed = false
+  let observer: MutationObserver
+  const watchLifecycle = (): void => {
+    observer.disconnect()
+    if (flow?.isConnected !== true) {
+      // No active ChatView: discovery is rare, so a broad watcher is acceptable.
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] })
+      return
+    }
+    // Once mounted, watch only the active flow's ancestor chain. React message
+    // body churn is below the flow and must not wake the global lifecycle path.
+    let node: HTMLElement | null = flow
+    while (node !== null) {
+      observer.observe(node, { attributes: true, attributeFilter: ['hidden'] })
+      const parent = node.parentElement
+      if (parent !== null) observer.observe(parent, { childList: true })
+      if (node === document.body) break
+      node = parent
+    }
+  }
   const reconcile = (): void => {
     if (disposed) return
     const enabled = settings.getSnapshot().enabled
@@ -54,7 +73,7 @@ export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKe
     const next = enabled
       ? [...document.querySelectorAll<HTMLElement>('[data-chat-flow]')].find(el => el.closest('[hidden]') === null)
       : undefined
-    if (next === flow) return
+    if (next === flow) { watchLifecycle(); return }
     stop?.()
     stop = undefined
     flow = next
@@ -62,9 +81,10 @@ export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKe
       try { stop = mount(ctx, next, t, settings) }
       catch { console.warn('[dsh-sm-context-piano] navigator unavailable; native navigation retained') }
     }
+    watchLifecycle()
   }
-  const observer = new MutationObserver(reconcile)
-  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] })
+  observer = new MutationObserver(reconcile)
+  watchLifecycle()
   const unsubscribe = settings.subscribe(reconcile)
   reconcile()
   return () => { disposed = true; observer.disconnect(); unsubscribe(); stop?.() }
@@ -677,19 +697,23 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     for (const node of record.removedNodes) if (touchesAnchor(node)) return true
     return false
   }
-  const dom = new MutationObserver(records => {
+  const structureDom = new MutationObserver(records => {
+    if (records.some(childListChangesNavigation)) schedule(DIRTY_DOM | DIRTY_VIEW)
+  })
+  // Official ChatView renders ChatNodeSeat wrappers as direct children of
+  // [data-chat-flow]. Watching only that structural boundary avoids every
+  // Markdown/token childList mutation inside a message body.
+  structureDom.observe(flow, { childList: true })
+  structureDom.observe(local, { childList: true })
+  const attributeDom = new MutationObserver(records => {
     let flags = 0
     for (const record of records) {
-      if (record.type === 'childList') {
-        if (childListChangesNavigation(record)) flags |= DIRTY_DOM | DIRTY_VIEW
-        continue
-      }
       if (record.attributeName === 'hidden' || record.attributeName === 'aria-label' || record.attributeName === 'disabled') flags |= DIRTY_DOM | DIRTY_VIEW
       else if (record.attributeName === 'aria-current' || record.attributeName === 'aria-busy') flags |= DIRTY_NATIVE_STATE | DIRTY_VIEW
     }
     if (flags !== 0) schedule(flags)
   })
-  dom.observe(local, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy', 'disabled'] })
+  attributeDom.observe(local, { subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy', 'disabled'] })
   composerDom = new MutationObserver(records => {
     if (!records.some(record => [...record.addedNodes, ...record.removedNodes].some(touchesComposer))) return
     syncComposerSeat()
@@ -710,7 +734,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (!alive) return
     alive = false; activation++; landing.cancel()
     if (binding?.session.sessionId === ctx.sessions.list.getSnapshot().current) owner.cancel()
-    owner.release(); sourceStop?.(); listStop(); settingsStop(); dom.disconnect(); composerDom?.disconnect(); resize?.disconnect()
+    owner.release(); sourceStop?.(); listStop(); settingsStop(); structureDom.disconnect(); attributeDom.disconnect(); composerDom?.disconnect(); resize?.disconnect()
     if (retry !== undefined) clearTimeout(retry)
     clearStreamRefresh(true)
     if (frame !== 0) window.cancelAnimationFrame(frame)
