@@ -7,8 +7,9 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import { observeChatNodes } from './chat-source.ts'
 import { buildNavigationNodes } from './keys.ts'
+import type { KeyDescriptor } from './keys.ts'
 import { buildPianoItems, mergeNavigationTurns } from './navigation-model.ts'
-import type { PianoItem } from './navigation-model.ts'
+import type { NavigationTurn, PianoItem } from './navigation-model.ts'
 import { createNativeNavigation } from './native-navigation.ts'
 import { createSemanticLanding } from './semantic-landing.ts'
 import { SEMANTIC_CSS, semanticLabel, landingFailure } from './semantic-style.ts'
@@ -28,6 +29,14 @@ export function stackPositions(count: number, height = railHeight(DEFAULT_SETTIN
   return Array.from({ length: count }, (_, index) => top + index * pitch)
 }
 let instanceCount = 0
+
+const DIRTY_NODES = 1 << 0
+const DIRTY_TURNS = 1 << 1
+const DIRTY_DOM = 1 << 2
+const DIRTY_LAYOUT = 1 << 3
+const DIRTY_NATIVE_STATE = 1 << 4
+const DIRTY_VIEW = 1 << 5
+const DIRTY_ALL = DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_NATIVE_STATE | DIRTY_VIEW
 
 /** Attach to the visible ChatView, never to a background/hidden conversation. */
 export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKey>, settings: PianoSettingsSource = DEFAULT_SETTINGS_SOURCE): () => void {
@@ -99,12 +108,18 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
 
   let alive = true
   let frame = 0
+  let dirty = DIRTY_ALL
   let binding: SessionBinding | undefined
   let sourceStop: (() => void) | undefined
   let retry: ReturnType<typeof setTimeout> | undefined
   let retries = 0
   let nodes: readonly ChatConversationViewNode[] = []
+  let turns: NavigationTurn[] = []
+  let segments: KeyDescriptor[] = []
   let items: PianoItem[] = []
+  let itemByKey = new Map<string, PianoItem>()
+  let itemIndexByKey = new Map<string, number>()
+  let firstItemByAnchor = new Map<string, string>()
   let active: string | null = null
   let selected: string | null = null
   let browseStart: string | null = null
@@ -115,11 +130,21 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let localFailure = false
   let activation = 0
   let nativeReady = false
+  let nativeActiveTurn: number | null = null
+  let busyTurn: number | null = null
   let warned = false
   let top = 0
   let left = 0
+  let width = 0
+  let height = 0
+  let capacity = 1
+  let stripViewportTop = 0
+  let visibleItems: PianoItem[] = []
+  let visiblePositions: number[] = []
+  let tooltipKey: string | null = null
   const buttons = new Map<string, HTMLButtonElement>()
-  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback' }
+  const perf = { renders: 0, nodeRebuilds: 0, turnRebuilds: 0, domReconciles: 0, hitTests: 0 }
+  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', perf }
   const debugHost = globalThis as unknown as { __smcpDebug?: typeof debug }
   debugHost.__smcpDebug = debug
 
@@ -144,12 +169,15 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     debug.mode = 'native-fallback'
     debug.hiddenReason = reason
   }
-  const schedule = (): void => {
+  const schedule = (flags = DIRTY_VIEW): void => {
+    dirty |= flags
     if (!alive || frame !== 0) return
     frame = window.requestAnimationFrame(() => {
       frame = 0
       if (!alive) return
-      try { render() }
+      const pending = dirty
+      dirty = 0
+      try { render(pending) }
       catch {
         fallback('contract')
         if (!warned) { warned = true; console.warn('[dsh-sm-context-piano] navigator contract changed; native UI restored') }
@@ -157,34 +185,77 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     })
   }
   const readingKey = (): string | null => {
+    perf.hitTests++
     const line = scrollport.getBoundingClientRect().top + Math.min(120, scrollport.clientHeight * .18)
-    let key: string | null = null
-    const measured = new Map<string, number>()
-    for (const item of items) {
-      if (item.anchorKey === null) continue
-      const row = owner.rowFor(item.anchorKey)
-      if (row === null) continue
-      let y = measured.get(item.anchorKey)
-      if (y === undefined) { y = row.getBoundingClientRect().top; measured.set(item.anchorKey, y) }
-      if (key === null || y <= line) key = item.key
+    const flowRect = flow.getBoundingClientRect()
+    const hitTest = document.elementsFromPoint?.bind(document)
+    if (typeof hitTest === 'function' && flowRect.width > 0) {
+      const xs = [Math.min(flowRect.right - 1, flowRect.left + 18), flowRect.left + flowRect.width / 2]
+      const ys = [line, line - 8, line + 8]
+      for (const y of ys) for (const x of xs) {
+        for (const element of hitTest(x, y)) {
+          const row = element.closest<HTMLElement>?.('[data-chat-anchor-key]') ?? null
+          if (row === null || !flow.contains(row) || row.closest('[hidden]') !== null) continue
+          const anchor = row.dataset.chatAnchorKey
+          if (anchor === undefined) continue
+          const key = firstItemByAnchor.get(anchor)
+          if (key !== undefined) return key
+        }
+      }
     }
-    return key
+    return nativeActiveTurn === null ? null : itemByKey.has(`turn:${nativeActiveTurn}`) ? `turn:${nativeActiveTurn}` : null
   }
-  const render = (): void => {
-    const snapshot = binding === undefined ? undefined : ctx.uiConversation.binding(binding).target('chat').getSnapshot()
-    const loaded = snapshot?.navigation.items() ?? []
-    const outline = binding?.session.projections.faceOf('turnOutline').getSnapshot()
-    const turns = mergeNavigationTurns(loaded, outline)
-    nativeReady = owner.reconcile(turns)
-    landing.refresh()
-    const segments = buildNavigationNodes(nodes).filter(segment => owner.rowFor(segment.anchorKey) !== null
-      || ((segment.kind === 'question' || segment.kind === 'answer') && landing.canReveal(segment.anchorKey)))
-    items = buildPianoItems(turns, segments, turn => copy('turn', turn))
-    debug.total = items.length
-    const rootRect = root.getBoundingClientRect()
-    const flowLeft = flow.getBoundingClientRect().left - rootRect.left
-    const width = root.clientWidth || rootRect.width
-    left = Math.max(16, flowLeft - 108)
+  const rebuildItemIndex = (): void => {
+    itemByKey = new Map()
+    itemIndexByKey = new Map()
+    firstItemByAnchor = new Map()
+    items.forEach((item, index) => {
+      itemByKey.set(item.key, item)
+      itemIndexByKey.set(item.key, index)
+      if (item.anchorKey !== null && !firstItemByAnchor.has(item.anchorKey)) firstItemByAnchor.set(item.anchorKey, item.key)
+    })
+  }
+  const render = (pending: number): void => {
+    perf.renders++
+    if ((pending & DIRTY_TURNS) !== 0) {
+      const snapshot = binding === undefined ? undefined : ctx.uiConversation.binding(binding).target('chat').getSnapshot()
+      const loaded = snapshot?.navigation.items() ?? []
+      const outline = binding?.session.projections.faceOf('turnOutline').getSnapshot()
+      turns = mergeNavigationTurns(loaded, outline)
+      perf.turnRebuilds++
+    }
+    if ((pending & DIRTY_NODES) !== 0) {
+      segments = buildNavigationNodes(nodes)
+      perf.nodeRebuilds++
+    }
+    if ((pending & (DIRTY_DOM | DIRTY_TURNS)) !== 0) {
+      nativeReady = owner.reconcile(turns)
+      if ((pending & DIRTY_DOM) !== 0) landing.refresh()
+      perf.domReconciles++
+    }
+    if ((pending & (DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM)) !== 0) {
+      const availableSegments = segments.filter(segment => owner.rowFor(segment.anchorKey) !== null
+        || ((segment.kind === 'question' || segment.kind === 'answer') && landing.canReveal(segment.anchorKey)))
+      items = buildPianoItems(turns, availableSegments, turn => copy('turn', turn))
+      rebuildItemIndex()
+      debug.total = items.length
+    }
+    if ((pending & (DIRTY_NATIVE_STATE | DIRTY_DOM | DIRTY_TURNS)) !== 0) {
+      busyTurn = owner.busy()
+      nativeActiveTurn = owner.active()
+    }
+    if ((pending & DIRTY_LAYOUT) !== 0 || width === 0) {
+      const rootRect = root.getBoundingClientRect()
+      const flowLeft = flow.getBoundingClientRect().left - rootRect.left
+      width = root.clientWidth || rootRect.width
+      left = Math.max(16, flowLeft - 108)
+      const config = settings.getSnapshot()
+      const available = Math.max(0, scrollport.clientHeight - (scrollport.querySelector<HTMLElement>('[data-composer-seat]')?.offsetHeight ?? 0))
+      height = Math.min(railHeight(config), Math.max(config.keyHeight, available - 48))
+      capacity = Math.min(config.maxVisible, Math.max(1, Math.floor((height - config.keyHeight) / config.keyGap) + 1))
+      top = Math.max(8, (scrollport.getBoundingClientRect().top - rootRect.top) + (available - height) / 2)
+      stripViewportTop = rootRect.top + top
+    }
     if (!nativeReady || items.length === 0 || width < 520 || left + 70 > flowLeft) {
       fallback(!nativeReady ? 'contract' : items.length === 0 ? 'empty' : width < 520 ? 'narrow' : 'overlap')
       return
