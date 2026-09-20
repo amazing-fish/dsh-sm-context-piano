@@ -146,6 +146,23 @@ await check('native navigation replacement is detected and re-owned without doub
   assert.equal(native.getAttribute('aria-hidden'), 'true')
 })
 
+await check('native button replacement is reindexed without observing transcript subtrees', async () => {
+  const original = nativeButton(4)
+  const replacement = original.cloneNode(true)
+  original.replaceWith(replacement)
+  await frame()
+  assert.equal(piano().hidden, false)
+  replacement.disabled = true
+  await frame()
+  assert.equal(piano().hidden, true)
+  replacement.disabled = false
+  await frame()
+  assert.equal(piano().hidden, false)
+  replacement.replaceWith(original)
+  await frame()
+  assert.equal(piano().hidden, false)
+})
+
 await check('native disabled-state drift fails open and reclaims after recovery', async () => {
   nativeButton(3).disabled = true
   await frame()
@@ -184,6 +201,15 @@ await check('message-body DOM churn does not rebuild navigation indexes', async 
   span.remove()
   await frame()
   assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
+  const richButton = document.createElement('button')
+  row.append(richButton)
+  richButton.setAttribute('aria-label', 'streamed action')
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
+  richButton.setAttribute('aria-label', 'streamed action updated')
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
+  richButton.remove()
 })
 
 await check('reading-line gaps skip unkeyed process rows and preserve the preceding semantic segment', async () => {
