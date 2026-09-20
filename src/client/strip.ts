@@ -661,11 +661,11 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   }
   let composerSeat = scrollport.querySelector<HTMLElement>('[data-composer-seat]')
   let resize: ResizeObserver | null = null
-  const touchesAnchor = (node: Node): boolean => node instanceof Element
+  const touchesAnchor = (node: Node): boolean => node instanceof window.Element
     && (node.matches('[data-chat-anchor-key]') || node.querySelector('[data-chat-anchor-key]') !== null)
-  const touchesNavigation = (node: Node): boolean => node instanceof Element
+  const touchesNavigation = (node: Node): boolean => node instanceof window.Element
     && (node.matches('nav,[role="navigation"]') || node.querySelector('nav,[role="navigation"]') !== null)
-  const touchesComposer = (node: Node): boolean => node instanceof Element
+  const touchesComposer = (node: Node): boolean => node instanceof window.Element
     && (node.matches('[data-composer-seat]') || node.querySelector('[data-composer-seat]') !== null)
   let composerParent: HTMLElement | null = composerSeat?.parentElement ?? null
   let composerDom: MutationObserver | null = null
@@ -686,7 +686,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     observeComposerParent()
   }
   const childListChangesNavigation = (record: MutationRecord): boolean => {
-    const target = record.target instanceof Element ? record.target : record.target.parentElement
+    const target = record.target instanceof window.Element ? record.target : record.target.parentElement
     const outsideFlow = target === null || !flow.contains(target)
     if (outsideFlow && target?.closest('nav,[role="navigation"]') !== null) return true
     if (outsideFlow) {
@@ -721,7 +721,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   const attributeDom = new MutationObserver(records => {
     let flags = 0
     for (const record of records) {
-      const target = record.target instanceof Element ? record.target : null
+      const target = record.target instanceof window.Element ? record.target : null
       if (record.attributeName === 'hidden') {
         flags |= DIRTY_DOM | DIRTY_VIEW
         continue
