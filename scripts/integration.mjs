@@ -367,11 +367,11 @@ await check('contract drift restores official UI and hides Piano, never both', a
 })
 await check('narrow-container fallback restores native ownership', async () => {
   Object.defineProperty(root, 'clientWidth', { value: 500, configurable: true })
-  chat.emit(); await frame()
+  await triggerResize(root)
   assert.equal(piano().hidden, true)
   assert.equal(native.style.display, '')
   Object.defineProperty(root, 'clientWidth', { value: 1280, configurable: true })
-  chat.emit(); await frame()
+  await triggerResize(root)
 })
 await check('disable restores native visibility and releases all subscriptions', async () => {
   await set('enabled', false)
