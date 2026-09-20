@@ -86,6 +86,13 @@ function refresh() {
       const row = document.createElement('div'); row.dataset.chatAnchorKey = key; row.dataset.chatTurn = String(turn)
       row.getBoundingClientRect = () => rect(300, (turn - 1) * 220 + (role === 'a' ? 100 : 0) - scroll.scrollTop, 748, 90)
       flow.append(row)
+      if (turn === 8 && role === 'a') {
+        const control = document.createElement('div')
+        control.dataset.chatAnchorKey = 'control8'
+        control.dataset.chatTurn = '8'
+        control.getBoundingClientRect = () => rect(300, (turn - 1) * 220 + 140 - scroll.scrollTop, 748, 30)
+        flow.append(control)
+      }
     }
   }
   chat.set({ order, nodes: nodeStore, navigation: { items: () => navigation } })
@@ -151,8 +158,9 @@ await check('message-body DOM churn does not rebuild navigation indexes', async 
   assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
 })
 
-await check('reading-line gaps preserve the preceding semantic segment', async () => {
-  scroll.scrollTop = 1540
+await check('reading-line gaps skip unkeyed process rows and preserve the preceding semantic segment', async () => {
+  // Reading line is below control8 (no Piano key) and above u9.
+  scroll.scrollTop = 1600
   scroll.dispatchEvent(new window.Event('scroll'))
   await frame()
   const current = document.querySelector('.smcp-bar[aria-current="true"]')
