@@ -135,6 +135,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let warned = false
   let top = 0
   let left = 0
+  let flowLeft = 0
   let width = 0
   let height = 0
   let capacity = 1
@@ -158,6 +159,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       ? `正在加载第 ${turn} 轮…` : `第 ${turn} 轮未加载，点击重试。`
   }
   const closePreview = (): void => {
+    tooltipKey = null
     tooltip.classList.remove('smcp-tooltip-visible')
     strip.removeAttribute('aria-describedby')
   }
@@ -246,7 +248,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     }
     if ((pending & DIRTY_LAYOUT) !== 0 || width === 0) {
       const rootRect = root.getBoundingClientRect()
-      const flowLeft = flow.getBoundingClientRect().left - rootRect.left
+      flowLeft = flow.getBoundingClientRect().left - rootRect.left
       width = root.clientWidth || rootRect.width
       left = Math.max(16, flowLeft - 108)
       const config = settings.getSnapshot()
@@ -261,34 +263,29 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       return
     }
     const config = settings.getSnapshot()
-    const available = Math.max(0, scrollport.clientHeight - (scrollport.querySelector<HTMLElement>('[data-composer-seat]')?.offsetHeight ?? 0))
-    const height = Math.min(railHeight(config), Math.max(config.keyHeight, available - 48))
-    const capacity = Math.min(config.maxVisible, Math.max(1, Math.floor((height - config.keyHeight) / config.keyGap) + 1))
-    const busy = owner.busy()
     const loadedBusy = binding?.session.getSnapshot().loadingOlder ?? false
-    if (requestedTurn !== null && busy === null && !loadedBusy) {
+    if (requestedTurn !== null && busyTurn === null && !loadedBusy) {
       const destination = turns.find(turn => turn.turn === requestedTurn)
       failedTurn = destination?.anchor.kind === 'unloaded' ? requestedTurn : null
       requestedTurn = null
     }
-    active = readingKey() ?? `turn:${owner.active() ?? turns.at(-1)?.turn}`
-    if (selected !== null && !items.some(item => item.key === selected)) selected = null
-    const centerKey = selected !== null && (document.activeElement === strip || pointerInside || busy !== null) ? selected : active
-    const center = Math.max(0, items.findIndex(item => item.key === centerKey))
-    const manual = browseStart === null ? -1 : items.findIndex(item => item.key === browseStart)
+    active = readingKey() ?? `turn:${nativeActiveTurn ?? turns.at(-1)?.turn}`
+    if (selected !== null && !itemByKey.has(selected)) selected = null
+    const centerKey = selected !== null && (document.activeElement === strip || pointerInside || busyTurn !== null) ? selected : active
+    const center = Math.max(0, centerKey === null ? 0 : itemIndexByKey.get(centerKey) ?? 0)
+    const manual = browseStart === null ? -1 : itemIndexByKey.get(browseStart) ?? -1
     windowStart = manual < 0 ? visibleWindow(items.length, center, capacity).start
       : Math.max(0, Math.min(items.length - capacity, manual))
-    const visible = items.slice(windowStart, windowStart + capacity)
-    top = Math.max(8, (scrollport.getBoundingClientRect().top - rootRect.top) + (available - height) / 2)
+    visibleItems = items.slice(windowStart, windowStart + capacity)
     strip.style.top = `${top}px`
     strip.style.transform = 'none'
     strip.style.left = `${left}px`
     strip.style.height = `${height}px`
-    const positions = stackPositions(visible.length, height, config.keyGap, config.keyHeight)
-    const retained = new Set(visible.map(item => item.key))
+    visiblePositions = stackPositions(visibleItems.length, height, config.keyGap, config.keyHeight)
+    const retained = new Set(visibleItems.map(item => item.key))
     for (const [key, button] of buttons) if (!retained.has(key)) { button.remove(); buttons.delete(key) }
-    const focusIndex = visible.findIndex(item => item.key === selected)
-    visible.forEach((item, index) => {
+    const focusIndex = visibleItems.findIndex(item => item.key === selected)
+    visibleItems.forEach((item, index) => {
       let button = buttons.get(item.key)
       if (button === undefined) {
         button = document.createElement('button')
@@ -303,21 +300,28 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       button.dataset.unloaded = String(item.anchorKey === null)
       button.setAttribute('aria-label', `${copy('turn', item.turn)} · ${semanticLabel(item, config.language)}: ${item.title}`)
       button.setAttribute('aria-current', String(item.key === active))
-      button.setAttribute('aria-busy', String(item.turn === busy))
+      button.setAttribute('aria-busy', String(item.turn === busyTurn))
       button.classList.toggle('smcp-bar-current', item.key === active)
       button.classList.toggle('smcp-bar-hover', item.key === selected)
-      button.style.top = `${positions[index] - config.keyHeight / 2}px`
+      button.style.top = `${visiblePositions[index] - config.keyHeight / 2}px`
       button.style.height = `${config.keyHeight}px`
       const base = item.key === active ? 24 : 10
       const wave = focusIndex < 0 ? 0 : Math.exp(-((index - focusIndex) ** 2) / (2 * 1.35 ** 2))
       button.style.width = `${base + (48 - base) * wave}px`
     })
-    const focused = visible.find(item => item.key === selected)
+    const focused = focusIndex < 0 ? undefined : visibleItems[focusIndex]
     if (focused !== undefined) {
-      badge.textContent = semanticLabel(focused, config.language)
-      title.textContent = focused.title; body.textContent = focused.preview
-      tooltip.style.left = `${Math.max(8, Math.min(left + 64, width - (tooltip.offsetWidth || 400) - 8))}px`
-      tooltip.style.top = `${Math.max(8, Math.min(top + positions[focusIndex] - 48, root.clientHeight - (tooltip.offsetHeight || 150) - 8))}px`
+      const previewChanged = tooltipKey !== focused.key
+      if (previewChanged) {
+        tooltipKey = focused.key
+        badge.textContent = semanticLabel(focused, config.language)
+        title.textContent = focused.title
+        body.textContent = focused.preview
+      }
+      if (previewChanged || (pending & DIRTY_LAYOUT) !== 0) {
+        tooltip.style.left = `${Math.max(8, Math.min(left + 64, width - (tooltip.offsetWidth || 400) - 8))}px`
+        tooltip.style.top = `${Math.max(8, Math.min(top + visiblePositions[focusIndex] - 48, root.clientHeight - (tooltip.offsetHeight || 150) - 8))}px`
+      }
       tooltip.classList.add('smcp-tooltip-visible')
       strip.setAttribute('aria-activedescendant', buttons.get(focused.key)!.id)
       strip.setAttribute('aria-describedby', tooltip.id)
@@ -325,9 +329,9 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       closePreview(); strip.removeAttribute('aria-activedescendant')
     }
     status.textContent = localFailure ? landingFailure(config.language)
-      : busy !== null ? copy('loading', busy) : failedTurn !== null ? copy('failed', failedTurn) : ''
+      : busyTurn !== null ? copy('loading', busyTurn) : failedTurn !== null ? copy('failed', failedTurn) : ''
     strip.hidden = false; owner.claim()
-    debug.mode = 'piano'; debug.hiddenReason = null; debug.bars = visible.length; debug.windowStart = windowStart
+    debug.mode = 'piano'; debug.hiddenReason = null; debug.bars = visibleItems.length; debug.windowStart = windowStart
   }
   const bind = (): void => {
     const id = ctx.sessions.list.getSnapshot().current
