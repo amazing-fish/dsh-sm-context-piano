@@ -19,6 +19,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   let buttons = new Map<number, HTMLButtonElement>()
   let turns: readonly NavigationTurn[] = []
   let rows = new Map<string, HTMLElement>()
+  let orderedRows: HTMLElement[] = []
   // Only bridges synchronous input before the next native DOM publication.
   // Once reconciled, the native aria-busy state is the sole pending authority.
   let issuedUnloaded = false
@@ -29,8 +30,11 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   }
   const refreshRows = (): void => {
     rows = new Map()
+    orderedRows = []
     for (const row of flow.querySelectorAll<HTMLElement>('[data-chat-anchor-key]')) {
-      if (row.dataset.chatAnchorKey !== undefined && row.closest('[hidden]') === null) rows.set(row.dataset.chatAnchorKey, row)
+      if (row.dataset.chatAnchorKey === undefined || row.closest('[hidden]') !== null) continue
+      rows.set(row.dataset.chatAnchorKey, row)
+      orderedRows.push(row)
     }
   }
   const release = (): void => {
@@ -52,6 +56,26 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     const row = rows.get(key)
     return row?.isConnected && row.closest('[hidden]') === null ? row : null
   }
+  const anchorAtOrBefore = (clientY: number): string | null => {
+    let low = 0
+    let high = orderedRows.length - 1
+    let chosen: HTMLElement | null = null
+    // DOM rows are transcript-ordered. Binary search limits the gap fallback
+    // to O(log N) rect reads instead of rescanning every message.
+    while (low <= high) {
+      const middle = (low + high) >>> 1
+      const row = orderedRows[middle]
+      if (!row.isConnected || row.closest('[hidden]') !== null) {
+        refreshRows()
+        return anchorAtOrBefore(clientY)
+      }
+      if (row.getBoundingClientRect().top <= clientY) {
+        chosen = row
+        low = middle + 1
+      } else high = middle - 1
+    }
+    return chosen?.dataset.chatAnchorKey ?? null
+  }
   const flushReaderPosition = (): void => {
     // Feed the original ChatView's scroll/restoration ledger after a precise
     // segment landing. Do not duplicate chatScroll or its follow state.
@@ -63,7 +87,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     return null
   }
   const api = {
-    rowFor, release, busy,
+    rowFor, anchorAtOrBefore, release, busy,
     /** One row scan per publication, never one scan per mark. */
     reconcile(next: readonly NavigationTurn[]): boolean {
       refreshRows()
