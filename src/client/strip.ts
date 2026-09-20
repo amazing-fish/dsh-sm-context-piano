@@ -697,18 +697,39 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     for (const node of record.removedNodes) if (touchesAnchor(node)) return true
     return false
   }
+  let nativeSurface: HTMLElement | null = null
+  const nativeStructureDom = new MutationObserver(() => schedule(DIRTY_DOM | DIRTY_VIEW))
+  const syncNativeSurfaceObserver = (): void => {
+    const next = [...local.querySelectorAll<HTMLElement>('nav,[role="navigation"]')]
+      .find(element => !flow.contains(element) && element.getAttribute('aria-label') === nativeT('chat.turnNavigation.label')) ?? null
+    if (next === nativeSurface) return
+    nativeStructureDom.disconnect()
+    nativeSurface = next
+    if (nativeSurface !== null) nativeStructureDom.observe(nativeSurface, { childList: true, subtree: true })
+  }
   const structureDom = new MutationObserver(records => {
-    if (records.some(childListChangesNavigation)) schedule(DIRTY_DOM | DIRTY_VIEW)
+    if (!records.some(childListChangesNavigation)) return
+    syncNativeSurfaceObserver()
+    schedule(DIRTY_DOM | DIRTY_VIEW)
   })
   // Official ChatView renders ChatNodeSeat wrappers as direct children of
   // [data-chat-flow]. Watching only that structural boundary avoids every
   // Markdown/token childList mutation inside a message body.
   structureDom.observe(flow, { childList: true })
   structureDom.observe(local, { childList: true })
+  syncNativeSurfaceObserver()
   const attributeDom = new MutationObserver(records => {
     let flags = 0
     for (const record of records) {
-      if (record.attributeName === 'hidden' || record.attributeName === 'aria-label' || record.attributeName === 'disabled') flags |= DIRTY_DOM | DIRTY_VIEW
+      const target = record.target instanceof Element ? record.target : null
+      if (record.attributeName === 'hidden') {
+        flags |= DIRTY_DOM | DIRTY_VIEW
+        continue
+      }
+      // Native contract attributes live outside the transcript flow. Ignore
+      // matching aria attributes inside rich message content.
+      if (target !== null && flow.contains(target)) continue
+      if (record.attributeName === 'aria-label' || record.attributeName === 'disabled') flags |= DIRTY_DOM | DIRTY_VIEW
       else if (record.attributeName === 'aria-current' || record.attributeName === 'aria-busy') flags |= DIRTY_NATIVE_STATE | DIRTY_VIEW
     }
     if (flags !== 0) schedule(flags)
@@ -734,7 +755,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (!alive) return
     alive = false; activation++; landing.cancel()
     if (binding?.session.sessionId === ctx.sessions.list.getSnapshot().current) owner.cancel()
-    owner.release(); sourceStop?.(); listStop(); settingsStop(); structureDom.disconnect(); attributeDom.disconnect(); composerDom?.disconnect(); resize?.disconnect()
+    owner.release(); sourceStop?.(); listStop(); settingsStop(); structureDom.disconnect(); nativeStructureDom.disconnect(); attributeDom.disconnect(); composerDom?.disconnect(); resize?.disconnect()
     if (retry !== undefined) clearTimeout(retry)
     clearStreamRefresh(true)
     if (frame !== 0) window.cancelAnimationFrame(frame)
