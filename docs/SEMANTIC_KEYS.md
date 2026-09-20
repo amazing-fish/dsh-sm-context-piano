@@ -1,8 +1,8 @@
-# Final-result, interactive-question and speaker-coloured Piano keys
+# Final-result, interactive-question and semantic-coloured Piano keys
 
 ## Scope
 
-Continue the single visible Piano and full-history navigation from PR #2. Add one independent AI final-result key per durably closed successful Turn, native ask_user_question exchanges as keys, and user/AI colour differentiation. No second rail, new pager, responder, model call or transcript persistence.
+Continue the single visible Piano and full-history navigation from PR #2. Add one independent AI final-result key per durably closed successful Turn, native ask_user_question exchanges as keys, and semantic colour differentiation. No second rail, new pager, responder, model call or transcript persistence.
 
 ## Final result
 
@@ -18,11 +18,25 @@ Keys jump to native `call:<callId>` anchors. A compacted process row is revealed
 
 The short local disclosure transaction is cancelled on new navigation, reader input, fallback, session switch and disposal. It does not call `loadThrough`; original ChatView remains the only history-navigation owner.
 
-## Roles and accessibility
+## Semantic palette and accessibility
 
-User input and recorded answers use blue; AI output, questions and final results use purple. Active and hover keep their speaker family in both light and dark themes. Final keys have a second stroke; question/answer keys have square ends. Hover and accessible names include explicit role/kind/state labels in zh/en/zh-TW, so role is not conveyed only by colour. Unknown/unloaded Turn placeholders stay neutral rather than pretending to know internal roles.
+Colour follows the navigation meaning rather than only the speaker:
 
-Custom CSS variables: `--smcp-user-color`, `--smcp-user-active-color`, `--smcp-assistant-color`, `--smcp-assistant-active-color`.
+| Kind | Light theme | Dark theme | Meaning |
+| --- | --- | --- | --- |
+| ordinary AI output | neutral light gray | white / near-white | low-priority process prose |
+| user input | blue | blue | user request / steering |
+| recorded user answer | green | green | supplied interactive information |
+| AI question | amber | amber | interactive question / attention point |
+| AI final result | purple | purple | completed result |
+
+The light-theme ordinary-output key is intentionally medium neutral gray rather than literal white so it does not disappear on a white transcript. In the dark theme it is white/near-white, matching the desired normal-output appearance. Output/question/answer semantic overrides render at full opacity so their intended colours are not washed out by the base rail opacity; browser tests assert the final painted contrast is at least 3:1 in both themes. Active and hover states keep the same semantic family instead of collapsing to one generic colour.
+
+Final keys keep a second stroke; question/answer keys keep square ends. Hover and accessible names include explicit role/kind/state labels in zh/en/zh-TW, so meaning is never conveyed only by colour. Unknown/unloaded Turn placeholders stay neutral rather than pretending to know internal roles.
+
+Existing speaker variables remain compatible for user input and the assistant/final baseline: `--smcp-user-color`, `--smcp-user-active-color`, `--smcp-assistant-color`, `--smcp-assistant-active-color`.
+
+Semantic overrides are independently customizable with `--smcp-output-color`, `--smcp-output-active-color`, `--smcp-answer-color`, `--smcp-answer-active-color`, `--smcp-question-color`, and `--smcp-question-active-color`.
 
 ## Existing compatibility bug corrected
 

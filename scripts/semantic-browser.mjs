@@ -102,15 +102,56 @@ try {
     assert.equal(await key('question').first().evaluate(el => el === window.savedQuestionKey), true)
     assert.equal(await key('final').count(), 1)
   })
-  await test('roles retain light/dark colours and dark preview fallback remains legible', async () => {
-    const user = key('input').first(), ai = key('final').first()
-    assert.notEqual(await colour(user), await colour(ai))
-    await activate(user); const selectedUser = await colour(user)
-    await activate(ai); assert.notEqual(selectedUser, await colour(ai))
+  await test('semantic palette distinguishes output, input, answer, question and final in light/dark themes', async () => {
+    await page.evaluate(() => window.semanticFixture.normal())
+    await page.waitForFunction(() => document.querySelectorAll('.smcp-bar[data-kind="output"]').length > 0)
+    const input = key('input').first(), output = key('output', 1).first(), answer = key('answer').first()
+    const question = key('question').first(), final = key('final').first()
+    const rgb = value => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+    const neutral = ([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) <= 32
+    const blue = ([r, g, b]) => b > g && g > r
+    const green = ([r, g, b]) => g > r && g > b
+    const amber = ([r, g, b]) => r > g && g > b
+    const purple = ([r, g, b]) => b > r && r > g
+    const paintedContrast = async locator => locator.evaluate(el => {
+      const parse = value => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+      const style = getComputedStyle(el)
+      const surface = getComputedStyle(document.querySelector('main'))
+      const fg = parse(style.backgroundColor)
+      const bg = parse(surface.backgroundColor)
+      const opacity = Number.parseFloat(style.opacity || '1')
+      const mixed = fg.map((value, index) => value * opacity + bg[index] * (1 - opacity))
+      const lum = values => values
+        .map(value => value / 255)
+        .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
+        .reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0)
+      const [lighter, darker] = [lum(mixed), lum(bg)].sort((a, b) => b - a)
+      return { ratio: (lighter + .05) / (darker + .05), mixed, opacity }
+    })
+    assert.ok(neutral(rgb(await colour(output))), 'ordinary AI output should stay neutral')
+    assert.ok(blue(rgb(await colour(input))), 'user input should stay blue')
+    assert.ok(green(rgb(await colour(answer))), 'recorded user answer should be green')
+    assert.ok(amber(rgb(await colour(question))), 'AI question should be amber')
+    assert.ok(purple(rgb(await colour(final))), 'AI final result should stay purple')
+    for (const [name, locator] of [['output', output], ['input', input], ['answer', answer], ['question', question], ['final', final]]) {
+      const painted = await paintedContrast(locator)
+      assert.ok(painted.ratio >= 3, `${name} should keep >=3:1 painted contrast in light theme; got ${painted.ratio.toFixed(2)}`)
+    }
+    await activate(answer); assert.ok(green(rgb(await colour(answer))), 'active answer should remain green')
+    await activate(final); assert.ok(purple(rgb(await colour(final))), 'active final should remain purple')
     await page.screenshot({ path: 'test-results/semantic-keys-light.png', fullPage: true })
     await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', 'true'))
-    const darkUser = await colour(user), darkAI = await colour(ai)
-    assert.notEqual(darkUser, darkAI); assert.notEqual(darkUser, selectedUser)
+    const darkOutput = rgb(await colour(output)), darkInput = rgb(await colour(input))
+    const darkAnswer = rgb(await colour(answer)), darkQuestion = rgb(await colour(question)), darkFinal = rgb(await colour(final))
+    assert.ok(neutral(darkOutput) && Math.min(...darkOutput) >= 220, 'dark-theme ordinary output should be white/near-white')
+    assert.ok(blue(darkInput), 'dark-theme input should stay blue')
+    assert.ok(green(darkAnswer), 'dark-theme answer should stay green')
+    assert.ok(amber(darkQuestion), 'dark-theme question should stay amber')
+    assert.ok(purple(darkFinal), 'dark-theme final should stay purple')
+    for (const [name, locator] of [['output', output], ['input', input], ['answer', answer], ['question', question], ['final', final]]) {
+      const painted = await paintedContrast(locator)
+      assert.ok(painted.ratio >= 3, `${name} should keep >=3:1 painted contrast in dark theme; got ${painted.ratio.toFixed(2)}`)
+    }
     const contrast = await page.locator('.smcp-tooltip').evaluate(el => {
       const rgb = value => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
       const luminance = values => values.map(value => value / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
