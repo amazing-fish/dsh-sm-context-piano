@@ -7,9 +7,19 @@ const dom = new JSDOM('<!doctype html><body></body>', { url: 'http://localhost/'
 const { window } = dom
 const { document } = window
 Object.assign(globalThis, { window, document, MutationObserver: window.MutationObserver, Event: window.Event })
-globalThis.ResizeObserver = class { observe() {} disconnect() {} }
+const resizeObservers = []
+globalThis.ResizeObserver = class {
+  constructor(callback) { this.callback = callback; this.targets = new Set(); resizeObservers.push(this) }
+  observe(target) { this.targets.add(target) }
+  unobserve(target) { this.targets.delete(target) }
+  disconnect() { this.targets.clear() }
+}
 window.matchMedia = () => ({ matches: true })
 const frame = async () => { await new Promise(r => setTimeout(r, 80)) }
+const triggerResize = async target => {
+  for (const observer of resizeObservers) if (observer.targets.has(target)) observer.callback([{ target }], observer)
+  await frame()
+}
 const observable = value => {
   const listeners = new Set()
   return { getSnapshot: () => value, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) },
@@ -23,7 +33,11 @@ const flow = document.createElement('div')
 flow.dataset.chatFlow = ''
 const native = document.createElement('nav')
 native.setAttribute('aria-label', 'Turn navigation')
-local.append(native, flow); scroll.append(local); root.append(scroll); document.body.append(root)
+const composer = document.createElement('div')
+composer.dataset.composerSeat = ''
+let composerHeight = 0
+Object.defineProperty(composer, 'offsetHeight', { get: () => composerHeight })
+local.append(native, flow); scroll.append(local, composer); root.append(scroll); document.body.append(root)
 const rect = (left, top, width, height) => ({ left, top, width, height, right: left + width, bottom: top + height })
 Object.defineProperties(root, { clientWidth: { value: 1280, configurable: true }, clientHeight: { value: 900 }, getBoundingClientRect: { value: () => rect(0, 0, 1280, 900) } })
 Object.defineProperties(scroll, { clientHeight: { value: 800 }, getBoundingClientRect: { value: () => rect(0, 0, 1280, 800) } })
@@ -137,6 +151,29 @@ await check('message-body DOM churn does not rebuild navigation indexes', async 
   assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
 })
 
+await check('reading-line gaps preserve the preceding semantic segment', async () => {
+  scroll.scrollTop = 1540
+  scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+  const current = document.querySelector('.smcp-bar[aria-current="true"]')
+  assert.equal(current?.dataset.key, 'segment:a8::output:0')
+  scroll.scrollTop = 0
+  scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+})
+
+await check('composer autosize invalidates cached rail layout', async () => {
+  const before = Number.parseFloat(piano().style.top)
+  composerHeight = 260
+  await triggerResize(composer)
+  const after = Number.parseFloat(piano().style.top)
+  assert.ok(Number.isFinite(before) && Number.isFinite(after))
+  assert.ok(after < before - 50, `composer growth should move rail up: ${before} -> ${after}`)
+  composerHeight = 0
+  await triggerResize(composer)
+  assert.ok(Math.abs(Number.parseFloat(piano().style.top) - before) < 1)
+})
+
 await check('unloaded Turns appear without creating fake assistant segments', () => {
   assert.equal(globalThis.__smcpDebug.total, 13)
   assert.equal(key('turn:1').dataset.unloaded, 'true')
@@ -200,23 +237,31 @@ await check('reader wheel cancels a pending native landing', async () => {
   scroll.dispatchEvent(new window.WheelEvent('wheel', { deltaY: 100 })); await frame()
   assert.equal(pending, null)
 })
-await check('keyed-only streaming refreshes visible text', async () => {
+await check('keyed-only streaming refreshes visible text without a full semantic rebuild', async () => {
   await press('Home'); await press('ArrowDown')
+  const before = { ...globalThis.__smcpDebug.perf }
   map.get('a1').data.blocks[0].text = 'fresh stream'
-  sources.get('a1').emit(); await frame()
+  sources.get('a1').emit(); await frame(); await new Promise(resolve => setTimeout(resolve, 140)); await frame()
+  const after = globalThis.__smcpDebug.perf
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds)
+  assert.ok(after.keyedSemanticUpdates > before.keyedSemanticUpdates)
+  assert.equal(after.itemRebuilds, before.itemRebuilds)
   assert.match(document.querySelector('.smcp-tooltip').textContent, /fresh stream/)
 })
-await check('continuous keyed streaming throttles full semantic rebuilds', async () => {
-  const before = globalThis.__smcpDebug.perf.nodeRebuilds
+await check('continuous keyed streaming stays turn-local and throttled', async () => {
+  const before = { ...globalThis.__smcpDebug.perf }
   for (let index = 0; index < 12; index++) {
     map.get('a1').data.blocks[0].text = `stream burst ${index}`
     sources.get('a1').emit()
     await new Promise(resolve => setTimeout(resolve, 10))
   }
-  await new Promise(resolve => setTimeout(resolve, 160))
+  await new Promise(resolve => setTimeout(resolve, 180))
   await frame()
-  const rebuilt = globalThis.__smcpDebug.perf.nodeRebuilds - before
-  assert.ok(rebuilt <= 3, `expected <= 3 semantic rebuilds for token burst, got ${rebuilt}`)
+  const after = globalThis.__smcpDebug.perf
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds, 'token burst must not rebuild full transcript semantics')
+  assert.equal(after.itemRebuilds, before.itemRebuilds, 'stable one-turn shape must not rebuild global items')
+  const keyed = after.keyedSemanticUpdates - before.keyedSemanticUpdates
+  assert.ok(keyed >= 1 && keyed <= 3, `expected 1..3 turn-local semantic updates for burst, got ${keyed}`)
   assert.match(document.querySelector('.smcp-tooltip').textContent, /stream burst 11/)
 })
 
