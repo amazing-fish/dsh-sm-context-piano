@@ -19,6 +19,9 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   let buttons = new Map<number, HTMLButtonElement>()
   let turns: readonly NavigationTurn[] = []
   let rows = new Map<string, HTMLElement>()
+  let orderedRows: HTMLElement[] = []
+  let mappedAnchors = new Set<string>()
+  let mappedRows: HTMLElement[] = []
   // Only bridges synchronous input before the next native DOM publication.
   // Once reconciled, the native aria-busy state is the sole pending authority.
   let issuedUnloaded = false
@@ -29,9 +32,17 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   }
   const refreshRows = (): void => {
     rows = new Map()
+    orderedRows = []
     for (const row of flow.querySelectorAll<HTMLElement>('[data-chat-anchor-key]')) {
-      if (row.dataset.chatAnchorKey !== undefined && row.closest('[hidden]') === null) rows.set(row.dataset.chatAnchorKey, row)
+      if (row.dataset.chatAnchorKey === undefined || row.closest('[hidden]') !== null) continue
+      rows.set(row.dataset.chatAnchorKey, row)
+      orderedRows.push(row)
     }
+    mappedRows = orderedRows.filter(row => mappedAnchors.has(row.dataset.chatAnchorKey ?? ''))
+  }
+  const setMappedAnchors = (anchors: Iterable<string>): void => {
+    mappedAnchors = new Set(anchors)
+    mappedRows = orderedRows.filter(row => mappedAnchors.has(row.dataset.chatAnchorKey ?? ''))
   }
   const release = (): void => {
     issuedUnloaded = false
@@ -52,6 +63,26 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     const row = rows.get(key)
     return row?.isConnected && row.closest('[hidden]') === null ? row : null
   }
+  const anchorAtOrBefore = (clientY: number): string | null => {
+    let low = 0
+    let high = mappedRows.length - 1
+    let chosen: HTMLElement | null = null
+    // Only rows represented in the Piano participate, so unkeyed process/control
+    // anchors cannot force a fallback to the beginning of the Turn.
+    while (low <= high) {
+      const middle = (low + high) >>> 1
+      const row = mappedRows[middle]
+      if (!row.isConnected || row.closest('[hidden]') !== null) {
+        refreshRows()
+        return anchorAtOrBefore(clientY)
+      }
+      if (row.getBoundingClientRect().top <= clientY) {
+        chosen = row
+        low = middle + 1
+      } else high = middle - 1
+    }
+    return chosen?.dataset.chatAnchorKey ?? null
+  }
   const flushReaderPosition = (): void => {
     // Feed the original ChatView's scroll/restoration ledger after a precise
     // segment landing. Do not duplicate chatScroll or its follow state.
@@ -63,7 +94,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     return null
   }
   const api = {
-    rowFor, release, busy,
+    rowFor, setMappedAnchors, anchorAtOrBefore, release, busy,
     /** One row scan per publication, never one scan per mark. */
     reconcile(next: readonly NavigationTurn[]): boolean {
       refreshRows()

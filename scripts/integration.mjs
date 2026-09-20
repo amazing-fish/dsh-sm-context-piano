@@ -7,9 +7,19 @@ const dom = new JSDOM('<!doctype html><body></body>', { url: 'http://localhost/'
 const { window } = dom
 const { document } = window
 Object.assign(globalThis, { window, document, MutationObserver: window.MutationObserver, Event: window.Event })
-globalThis.ResizeObserver = class { observe() {} disconnect() {} }
+const resizeObservers = []
+globalThis.ResizeObserver = class {
+  constructor(callback) { this.callback = callback; this.targets = new Set(); resizeObservers.push(this) }
+  observe(target) { this.targets.add(target) }
+  unobserve(target) { this.targets.delete(target) }
+  disconnect() { this.targets.clear() }
+}
 window.matchMedia = () => ({ matches: true })
 const frame = async () => { await new Promise(r => setTimeout(r, 80)) }
+const triggerResize = async target => {
+  for (const observer of resizeObservers) if (observer.targets.has(target)) observer.callback([{ target }], observer)
+  await frame()
+}
 const observable = value => {
   const listeners = new Set()
   return { getSnapshot: () => value, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) },
@@ -23,7 +33,11 @@ const flow = document.createElement('div')
 flow.dataset.chatFlow = ''
 const native = document.createElement('nav')
 native.setAttribute('aria-label', 'Turn navigation')
-local.append(native, flow); scroll.append(local); root.append(scroll); document.body.append(root)
+const composer = document.createElement('div')
+composer.dataset.composerSeat = ''
+let composerHeight = 0
+Object.defineProperty(composer, 'offsetHeight', { get: () => composerHeight })
+local.append(native, flow); scroll.append(local, composer); root.append(scroll); document.body.append(root)
 const rect = (left, top, width, height) => ({ left, top, width, height, right: left + width, bottom: top + height })
 Object.defineProperties(root, { clientWidth: { value: 1280, configurable: true }, clientHeight: { value: 900 }, getBoundingClientRect: { value: () => rect(0, 0, 1280, 900) } })
 Object.defineProperties(scroll, { clientHeight: { value: 800 }, getBoundingClientRect: { value: () => rect(0, 0, 1280, 800) } })
@@ -72,6 +86,13 @@ function refresh() {
       const row = document.createElement('div'); row.dataset.chatAnchorKey = key; row.dataset.chatTurn = String(turn)
       row.getBoundingClientRect = () => rect(300, (turn - 1) * 220 + (role === 'a' ? 100 : 0) - scroll.scrollTop, 748, 90)
       flow.append(row)
+      if (turn === 8 && role === 'a') {
+        const control = document.createElement('div')
+        control.dataset.chatAnchorKey = 'control8'
+        control.dataset.chatTurn = '8'
+        control.getBoundingClientRect = () => rect(300, (turn - 1) * 220 + 140 - scroll.scrollTop, 748, 30)
+        flow.append(control)
+      }
     }
   }
   chat.set({ order, nodes: nodeStore, navigation: { items: () => navigation } })
@@ -111,6 +132,156 @@ await check('exactly one visible and accessible rail; native component stays mou
   assert.equal(native.getAttribute('aria-hidden'), 'true')
   assert.equal(native.querySelectorAll('button').length, 10)
 })
+await check('native navigation replacement is detected and re-owned without double rails', async () => {
+  const slot = document.createElement('div')
+  native.replaceWith(slot)
+  slot.append(native)
+  await frame()
+  assert.equal(piano().hidden, false)
+  assert.equal(native.style.getPropertyValue('display'), 'none')
+  const replacement = native.cloneNode(true)
+  native.replaceWith(replacement)
+  await frame()
+  assert.equal(piano().hidden, false)
+  assert.equal(replacement.style.getPropertyValue('display'), 'none')
+  assert.equal(replacement.getAttribute('aria-hidden'), 'true')
+  replacement.replaceWith(native)
+  await frame()
+  slot.replaceWith(native)
+  await frame()
+  assert.equal(piano().hidden, false)
+  assert.equal(native.style.getPropertyValue('display'), 'none')
+  assert.equal(native.getAttribute('aria-hidden'), 'true')
+})
+
+await check('native button replacement is reindexed without observing transcript subtrees', async () => {
+  const original = nativeButton(4)
+  const replacement = original.cloneNode(true)
+  original.replaceWith(replacement)
+  await frame()
+  assert.equal(piano().hidden, false)
+  replacement.disabled = true
+  await frame()
+  assert.equal(piano().hidden, true)
+  replacement.disabled = false
+  await frame()
+  assert.equal(piano().hidden, false)
+  replacement.replaceWith(original)
+  await frame()
+  assert.equal(piano().hidden, false)
+})
+
+await check('native disabled-state drift fails open and reclaims after recovery', async () => {
+  nativeButton(3).disabled = true
+  await frame()
+  assert.equal(piano().hidden, true)
+  assert.equal(native.style.display, '')
+  assert.equal(native.hasAttribute('aria-hidden'), false)
+  nativeButton(3).disabled = false
+  await frame()
+  assert.equal(piano().hidden, false)
+  assert.equal(native.style.getPropertyValue('display'), 'none')
+})
+
+await check('scroll hot path skips model rebuilds and DOM reconciliation', async () => {
+  const before = { ...globalThis.__smcpDebug.perf }
+  for (let index = 0; index < 100; index++) scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+  const after = globalThis.__smcpDebug.perf
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds)
+  assert.equal(after.turnRebuilds, before.turnRebuilds)
+  assert.equal(after.domReconciles, before.domReconciles)
+  assert.equal(after.mappedAnchorRebuilds, before.mappedAnchorRebuilds)
+  assert.equal(after.barWrites, before.barWrites)
+  assert.ok(after.renders - before.renders <= 2)
+})
+
+await check('scroll frames inside one semantic segment early-exit before Piano DOM rendering', async () => {
+  scroll.scrollTop = 1600
+  scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+  assert.equal(document.querySelector('.smcp-bar[aria-current="true"]')?.dataset.key, 'segment:a8::output:0')
+  const before = { ...globalThis.__smcpDebug.perf }
+  for (let index = 1; index <= 8; index++) {
+    scroll.scrollTop = 1600 + index
+    scroll.dispatchEvent(new window.Event('scroll'))
+    await frame()
+  }
+  const after = globalThis.__smcpDebug.perf
+  assert.ok(after.readerSkips - before.readerSkips >= 8)
+  assert.equal(after.barWrites, before.barWrites)
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds)
+  assert.equal(after.domReconciles, before.domReconciles)
+  scroll.scrollTop = 0
+  scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+})
+
+await check('message-body DOM churn does not rebuild navigation indexes', async () => {
+  const before = { ...globalThis.__smcpDebug.perf }
+  const row = flow.querySelector('[data-chat-anchor-key="a8"]')
+  const span = document.createElement('span')
+  span.textContent = 'streamed markdown child'
+  row.append(span)
+  await frame()
+  const after = globalThis.__smcpDebug.perf
+  assert.equal(after.domReconciles, before.domReconciles)
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds)
+  span.remove()
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
+  const richButton = document.createElement('button')
+  row.append(richButton)
+  richButton.setAttribute('aria-label', 'streamed action')
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
+  richButton.setAttribute('aria-label', 'streamed action updated')
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
+  richButton.hidden = true
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.domReconciles, before.domReconciles)
+  richButton.remove()
+})
+
+await check('reading-line gaps skip unkeyed process rows and preserve the preceding semantic segment', async () => {
+  // Reading line is below control8 (no Piano key) and above u9.
+  scroll.scrollTop = 1600
+  scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+  const current = document.querySelector('.smcp-bar[aria-current="true"]')
+  assert.equal(current?.dataset.key, 'segment:a8::output:0')
+  scroll.scrollTop = 0
+  scroll.dispatchEvent(new window.Event('scroll'))
+  await frame()
+})
+
+await check('composer autosize invalidates cached rail layout', async () => {
+  const before = Number.parseFloat(piano().style.top)
+  composerHeight = 260
+  await triggerResize(composer)
+  const after = Number.parseFloat(piano().style.top)
+  assert.ok(Number.isFinite(before) && Number.isFinite(after))
+  assert.ok(after < before - 50, `composer growth should move rail up: ${before} -> ${after}`)
+  composerHeight = 0
+  await triggerResize(composer)
+  assert.ok(Math.abs(Number.parseFloat(piano().style.top) - before) < 1)
+})
+
+await check('composer replacement as a scrollport sibling invalidates cached layout', async () => {
+  const before = Number.parseFloat(piano().style.top)
+  const replacement = document.createElement('div')
+  replacement.dataset.composerSeat = ''
+  Object.defineProperty(replacement, 'offsetHeight', { get: () => 220 })
+  composer.replaceWith(replacement)
+  await frame()
+  const moved = Number.parseFloat(piano().style.top)
+  assert.ok(moved < before - 40, `replacement composer should move rail up: ${before} -> ${moved}`)
+  replacement.replaceWith(composer)
+  await frame()
+  assert.ok(Math.abs(Number.parseFloat(piano().style.top) - before) < 1)
+})
+
 await check('unloaded Turns appear without creating fake assistant segments', () => {
   assert.equal(globalThis.__smcpDebug.total, 13)
   assert.equal(key('turn:1').dataset.unloaded, 'true')
@@ -124,6 +295,18 @@ await check('full-history Home/End keys work independently of maxVisible', async
   await press('Home')
   assert.ok(key('turn:1'))
 })
+await check('unrelated Session publications do not wake the Piano render loop', async () => {
+  const before = globalThis.__smcpDebug.perf.renders
+  sessionState.set({ ...sessionState.getSnapshot(), unrelatedStreamingTick: 1 })
+  await frame()
+  assert.equal(globalThis.__smcpDebug.perf.renders, before)
+  sessionState.set({ ...sessionState.getSnapshot(), loadingOlder: true })
+  await frame()
+  assert.ok(globalThis.__smcpDebug.perf.renders > before)
+  sessionState.set({ ...sessionState.getSnapshot(), loadingOlder: false })
+  await frame()
+})
+
 await check('unloaded activation delegates once and shows native busy state', async () => {
   await press('Enter')
   assert.deepEqual(requests, [1])
@@ -174,12 +357,39 @@ await check('reader wheel cancels a pending native landing', async () => {
   scroll.dispatchEvent(new window.WheelEvent('wheel', { deltaY: 100 })); await frame()
   assert.equal(pending, null)
 })
-await check('keyed-only streaming refreshes visible text', async () => {
+await check('keyed-only streaming refreshes text and repositions the same tooltip without full rebuilds', async () => {
   await press('Home'); await press('ArrowDown')
-  map.get('a1').data.blocks[0].text = 'fresh stream'
-  sources.get('a1').emit(); await frame()
-  assert.match(document.querySelector('.smcp-tooltip').textContent, /fresh stream/)
+  const before = { ...globalThis.__smcpDebug.perf }
+  const tooltip = document.querySelector('.smcp-tooltip')
+  tooltip.style.top = '777px'
+  map.get('a1').data.blocks[0].text = 'fresh stream with a longer preview that changes tooltip geometry'
+  sources.get('a1').emit(); await frame(); await new Promise(resolve => setTimeout(resolve, 140)); await frame()
+  const after = globalThis.__smcpDebug.perf
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds)
+  assert.ok(after.keyedSemanticUpdates > before.keyedSemanticUpdates)
+  assert.equal(after.itemRebuilds, before.itemRebuilds)
+  assert.equal(after.mappedAnchorRebuilds, before.mappedAnchorRebuilds)
+  assert.match(tooltip.textContent, /fresh stream/)
+  assert.notEqual(tooltip.style.top, '777px')
 })
+await check('continuous keyed streaming stays turn-local and throttled', async () => {
+  const before = { ...globalThis.__smcpDebug.perf }
+  for (let index = 0; index < 12; index++) {
+    map.get('a1').data.blocks[0].text = `stream burst ${index}`
+    sources.get('a1').emit()
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  await new Promise(resolve => setTimeout(resolve, 180))
+  await frame()
+  const after = globalThis.__smcpDebug.perf
+  assert.equal(after.nodeRebuilds, before.nodeRebuilds, 'token burst must not rebuild full transcript semantics')
+  assert.equal(after.itemRebuilds, before.itemRebuilds, 'stable one-turn shape must not rebuild global items')
+  assert.equal(after.mappedAnchorRebuilds, before.mappedAnchorRebuilds, 'stable token burst must not refilter all transcript anchors')
+  const keyed = after.keyedSemanticUpdates - before.keyedSemanticUpdates
+  assert.ok(keyed >= 1 && keyed <= 3, `expected 1..3 turn-local semantic updates for burst, got ${keyed}`)
+  assert.match(document.querySelector('.smcp-tooltip').textContent, /stream burst 11/)
+})
+
 await check('contract drift restores official UI and hides Piano, never both', async () => {
   nativeButton(3).setAttribute('aria-label', 'changed-contract'); await frame()
   assert.equal(piano().hidden, true)
@@ -190,11 +400,11 @@ await check('contract drift restores official UI and hides Piano, never both', a
 })
 await check('narrow-container fallback restores native ownership', async () => {
   Object.defineProperty(root, 'clientWidth', { value: 500, configurable: true })
-  chat.emit(); await frame()
+  await triggerResize(root)
   assert.equal(piano().hidden, true)
   assert.equal(native.style.display, '')
   Object.defineProperty(root, 'clientWidth', { value: 1280, configurable: true })
-  chat.emit(); await frame()
+  await triggerResize(root)
 })
 await check('disable restores native visibility and releases all subscriptions', async () => {
   await set('enabled', false)
