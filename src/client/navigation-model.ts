@@ -38,6 +38,23 @@ export function mergeNavigationTurns(loaded: readonly TurnNavigationItem[], outl
   }
   return [...turns.values()].sort((a, b) => a.turn - b.turn)
 }
+export function buildPianoItemsForTurn(
+  turn: NavigationTurn,
+  segments: readonly KeyDescriptor[],
+  label: (turn: number) => string,
+): PianoItem[] {
+  const children = turn.anchor.kind === 'loaded' ? segments.filter(segment => segment.turn === turn.turn) : []
+  if (children.length === 0) return [{
+    key: `turn:${turn.turn}`, turn: turn.turn, title: turn.prompt || label(turn.turn), preview: turn.response, role: 'turn',
+    anchorKey: turn.anchor.kind === 'loaded' ? turn.anchor.key : null,
+  }]
+  return children.map((segment, index) => ({
+    key: index === 0 ? `turn:${turn.turn}` : `segment:${segment.key}`,
+    turn: turn.turn, title: segment.title, preview: segment.preview, role: segment.role,
+    anchorKey: segment.anchorKey, kind: segment.kind, interactionState: segment.interactionState,
+  }))
+}
+
 export function buildPianoItems(turns: readonly NavigationTurn[], segments: readonly KeyDescriptor[], label: (turn: number) => string): PianoItem[] {
   const grouped = new Map<number, KeyDescriptor[]>()
   for (const segment of segments) {
@@ -45,16 +62,5 @@ export function buildPianoItems(turns: readonly NavigationTurn[], segments: read
     const list = grouped.get(segment.turn) ?? []
     list.push(segment); grouped.set(segment.turn, list)
   }
-  return turns.flatMap<PianoItem>(turn => {
-    const children = turn.anchor.kind === 'loaded' ? grouped.get(turn.turn) ?? [] : []
-    if (children.length === 0) return [{
-      key: `turn:${turn.turn}`, turn: turn.turn, title: turn.prompt || label(turn.turn), preview: turn.response, role: 'turn',
-      anchorKey: turn.anchor.kind === 'loaded' ? turn.anchor.key : null,
-    }]
-    return children.map((segment, index) => ({
-      key: index === 0 ? `turn:${turn.turn}` : `segment:${segment.key}`,
-      turn: turn.turn, title: segment.title, preview: segment.preview, role: segment.role,
-      anchorKey: segment.anchorKey, kind: segment.kind, interactionState: segment.interactionState,
-    }))
-  })
+  return turns.flatMap<PianoItem>(turn => buildPianoItemsForTurn(turn, grouped.get(turn.turn) ?? [], label))
 }
