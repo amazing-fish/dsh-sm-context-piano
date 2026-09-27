@@ -19,7 +19,7 @@ const check = async (name, fn) => {
 
 console.log('== host half ==')
 const manifest = requireHere('../package.json')
-check('host core packages are peer-only', () => {
+await check('host core packages are peer-only', () => {
   for (const name of ['@deepseek-ai/dsh-settings', '@deepseek-ai/schemastery']) {
     assert.equal(manifest.dependencies?.[name], undefined)
     assert.ok(manifest.peerDependencies?.[name])
@@ -28,7 +28,7 @@ check('host core packages are peer-only', () => {
   assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-settings'], '^0.1.7-rc.1')
 })
 
-check('pins the current DSH baseline and orders the public client owners', () => {
+await check('pins the current DSH baseline and orders the public client owners', () => {
   for (const [name, version] of Object.entries(manifest.devDependencies)) {
     if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.1.7-rc.2', name)
   }
@@ -40,7 +40,7 @@ check('pins the current DSH baseline and orders the public client owners', () =>
   assert.equal(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'), false)
 })
 
-check('every injected client dependency resolves as a package', () => {
+await check('every injected client dependency resolves as a package', () => {
   // Under the 0.1.7 loader, `dsh.client.inject` edges are informational
   // ordering only: `<name>/client` and the bare package name resolve to the
   // same exports row, so a `./client` subpath export is no longer required.
@@ -54,7 +54,7 @@ check('every injected client dependency resolves as a package', () => {
 })
 
 const host = await import('../lib/index.js')
-check('host exports the Config schema and opts out of the auto settings form', () => {
+await check('host exports the Config schema and opts out of the auto settings form', () => {
   const configureCalls = []
   assert.equal(typeof host.Config, 'function')
   const fields = Object.keys(host.Config?.dict ?? {})
@@ -89,7 +89,7 @@ globalThis.document = {
 }
 
 await import('../lib/client.js')
-check('client bundle registers its handoff', () => {
+await check('client bundle registers its handoff', () => {
   assert.equal(globalThis.__handoff.id, '@hjj345345/dsh-sm-context-piano')
   assert.equal(typeof globalThis.__handoff.factory, 'function')
 })
@@ -100,12 +100,12 @@ const exports = globalThis.__handoff.factory(spec => {
   throw new Error(`unexpected require: ${spec}`)
 })
 
-check('client exposes the DSH plugin contract', () => {
+await check('client exposes the DSH plugin contract', () => {
   assert.deepEqual(exports.inject, ['sessions', 'uiConversation', 'locale', 'slots', 'remote', 'remote.settings'])
   assert.equal(typeof exports.apply, 'function')
 })
 
-check('client apply registers locale, probe slot, settings section, and disposable effects', () => {
+await check('client apply registers locale, probe slot, settings section, and disposable effects', () => {
   const registrations = []
   const slotsByName = new Map()
   const sections = []
@@ -166,7 +166,7 @@ check('client apply registers locale, probe slot, settings section, and disposab
   assert.ok(effects >= 4, 'locale, styles, settings-dispose, and strip effects registered')
 })
 
-check('remote settings stay fail-closed while loading or after a failed describe', async () => {
+await check('remote settings stay fail-closed while loading or after a failed describe', async () => {
   let mode = 'fail'
   const persisted = { language: 'en', enabled: false, keyHeight: 3, keyGap: 16, maxVisible: 8 }
   const updateListeners = []
