@@ -1,0 +1,14 @@
+scripts/smoke.mjs
+  h_8428784c741401 22,31,43,57,92,103,108,169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "111e3ff763cc566686603677a07a3ef7c744e662",
+  "prompts": {},
+  "humans": {
+    "h_8428784c741401": {
+      "author": "Ziao Huang <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
