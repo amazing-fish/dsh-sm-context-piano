@@ -1,0 +1,16 @@
+scripts/browser-fixture.tsx
+  h_8428784c741401 34,83,100
+scripts/semantic-browser-fixture.tsx
+  h_8428784c741401 21,117,124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "7fa5026a999e592cc006f740ad91ba500dbecc48",
+  "prompts": {},
+  "humans": {
+    "h_8428784c741401": {
+      "author": "Ziao Huang <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
