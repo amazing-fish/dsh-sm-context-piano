@@ -101,25 +101,64 @@ refresh()
 const session = Object.assign({}, sessionState, { sessionId: 's1', projections: { faceOf: key => { assert.equal(key, 'turnOutline'); return outline } },
   loadThrough() { throw new Error('Piano must delegate to the native button, not start a second pager') } })
 let binding = { session }
-const selection = observable({ current: 's1' })
-const settings = observable({ value: { enabled: true, language: 'zh', keyHeight: 2, keyGap: 12, maxVisible: 20 }, writable: true })
-const set = async (key, value) => { settings.set({ ...settings.getSnapshot(), value: { ...settings.getSnapshot().value, [key]: value } }); await frame() }
+const listState = observable({ ids: ['s1'], byId: {}, phase: 'ready', projectionsBySession: {} })
+let settingsValue = { enabled: true, language: 'zh', keyHeight: 2, keyGap: 12, maxVisible: 20 }
+let settingsRevision = 1
+const documentUpdated = []
+const remote = {
+  settings: {
+    describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'sm-context-piano', revision: settingsRevision, value: settingsValue }], writable: true } }),
+    mutate: async (ns, ops, revision) => {
+      for (const op of ops) {
+        if (op.op === 'set') settingsValue = { ...settingsValue, [op.path[0]]: op.value }
+        else settingsValue = { language: 'zh', enabled: true, keyHeight: 2, keyGap: 12, maxVisible: 20, ...Object.fromEntries(Object.entries(settingsValue).filter(([key]) => !op.path.includes(key))) }
+      }
+      settingsRevision = revision + 1
+      const entry = { ns, revision: settingsRevision, value: settingsValue }
+      for (const listener of documentUpdated) listener(ns)
+      return { ok: true, value: entry }
+    },
+  },
+  $on: (event, listener) => {
+    if (event === 'settings/document-updated') documentUpdated.push(listener)
+    return () => {}
+  },
+}
+const set = async (key, value) => { await remote.settings.mutate('sm-context-piano', [{ op: 'set', path: [key], value }], settingsRevision); await frame() }
+let probeActivate
 const disposers = []
 const nativeTranslate = (key, args) => key === 'chat.turnNavigation.label' ? 'Turn navigation'
   : key === 'chat.turnNavigation.jumpLoad' ? `Load ${args.turn}` : key === 'chat.turnNavigation.jump' ? `Jump ${args.turn}` : key
 const ctx = {
   effect: fn => { const stop = fn(); disposers.push(stop); return stop },
   locale: { register: () => () => {}, bind: ns => ns === 'chat' ? nativeTranslate : key => key },
-  sessions: { list: selection, binding: id => id === 's1' ? binding : undefined },
+  remote,
+  sessions: { list: listState, binding: id => id === 's1' ? binding : undefined },
   uiConversation: { binding: b => { assert.equal(b, binding); return { target: key => { assert.equal(key, 'chat'); return chat } } } },
-  settingsScope: { bind: () => settings },
-  slots: { inject: (_, fn) => fn(), register: () => () => {} },
+  slots: {
+    inject: (name, callback) => { callback() },
+    register: (options, component) => {
+      if (options.name === 'conversation.session.header.actions') probeActivate = options.inject().activate
+      return () => {}
+    },
+  },
 }
 window.__ModuleLoader__ = { load: handoff => { globalThis.handoff = handoff } }
 await import('../lib/client.js')
 const plugin = globalThis.handoff.factory(spec => require(spec))
 plugin.apply(ctx)
-await frame()
+let probeStop = probeActivate('s1')
+// The rail stays fail-closed until remote describe() resolves, then mounts and
+// renders on the next animation frame; poll for that instead of a fixed delay
+// (slow Windows runners overran a single 80ms frame).
+const until = async (ready, what, timeout = 2000) => {
+  const start = Date.now()
+  while (!ready()) {
+    if (Date.now() - start > timeout) throw new Error(`timed out waiting for ${what}`)
+    await new Promise(r => setTimeout(r, 10))
+  }
+}
+await until(() => document.querySelector('.smcp-unified')?.hidden === false, 'the initial Piano mount')
 let passed = 0
 async function check(name, run) { await run(); passed++; console.log(`ok ${passed} - ${name}`) }
 const piano = () => document.querySelector('.smcp-unified')
@@ -416,12 +455,12 @@ await check('disable restores native visibility and releases all subscriptions',
   await set('enabled', true)
 })
 await check('same-ID binding replacement rebinds exactly once', async () => {
-  binding = { session }; selection.emit(); await frame()
+  binding = { session }; listState.emit(); await frame()
   assert.equal(chat.listeners.size, 1)
   assert.equal(outline.listeners.size, 1)
 })
 await check('session disappearance cannot publish stale content', async () => {
-  selection.set({ current: undefined }); chat.emit(); await frame()
+  probeStop(); chat.emit(); await frame()
   assert.equal(piano().hidden, true)
   assert.equal(native.style.display, '')
   assert.equal(chat.listeners.size, 0)

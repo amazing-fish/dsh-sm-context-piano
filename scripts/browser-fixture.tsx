@@ -31,6 +31,7 @@ const chat = observable(null)
 const lifecycle = observable({ openState: 'open', openError: null, hasMore: true, loadingOlder: false, running: false, queue: [], pendingSubmissions: [] })
 const outline = observable(Array.from({ length: 20 }, (_, i) => ({ turn: i + 1, seq: (i + 1) * 100, prompt: `Question ${i + 1}`, response: `Answer ${i + 1}` })))
 const selection = observable({ current: id, byId: { s1: { cwd: '/fixture' }, s2: { cwd: '/fixture' } } })
+const activeSession = observable<string | undefined>(id)
 const settings = observable({ language: 'en', enabled: true, keyHeight: 2, keyGap: 12, maxVisible: 8 })
 function rebuild() {
   nodeMap.clear()
@@ -79,7 +80,7 @@ const ctx: any = {
   locale: { bind: () => t }, sessions: { list: selection, binding: () => binding },
   uiConversation: { binding: () => ({ target: () => chat }) },
 }
-const dispose = attachKeyStrip(ctx, (() => 'Piano conversation navigation') as any, settings)
+const dispose = attachKeyStrip(ctx, (() => 'Piano conversation navigation') as any, activeSession, settings)
 ;(window as any).fixture = {
   calls, state: () => ({ head, saved, loading: lifecycle.getSnapshot().loadingOlder }),
   settle() {
@@ -96,6 +97,7 @@ const dispose = attachKeyStrip(ctx, (() => 'Piano conversation navigation') as a
   switchSession() {
     id = 's2'; binding = { session: { ...session, sessionId: id } }; saved = null
     selection.set({ ...selection.getSnapshot(), current: id }); render()
+    activeSession.set(id)
   },
   stop: dispose,
 }

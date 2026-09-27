@@ -1,9 +1,6 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
 import type {
-  SettingsScope,
-} from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {
   InjectFace,
   PropsRuntime,
 } from '@deepseek-ai/dsh-client-ui-slots'
@@ -18,13 +15,14 @@ import {
 import type {
   PianoLanguage,
   PianoSettings,
+  PianoSettingsScope,
   PianoSettingsSource,
 } from '../core/config.ts'
 import { translate } from './locales.ts'
 import type { SmContextPianoKey } from './locales.ts'
 
-const VERSION = 'v1.2.0'
-const RELEASE_DATE = '2026-09-02'
+const VERSION = 'v1.3.0-rc.1'
+const RELEASE_DATE = '2026-09-27'
 const AUTHOR = 'Jack·Huang'
 const EMAIL = 'jack698698@gmail.com'
 const GITHUB_URL = 'https://github.com/hjj345/dsh-sm-context-piano'
@@ -39,19 +37,12 @@ const LANGUAGE_OPTIONS: readonly { value: PianoLanguage; label: string }[] = [
 type SettingsErrorKey = 'settings.writeError' | 'settings.copyError'
 
 export interface PianoSettingsPageInjected {
-  scope: SettingsScope<PianoSettings>
+  scope: PianoSettingsScope
 }
 
 export type PianoSettingsPageProps =
   PropsRuntime<'settings.section'>
   & InjectFace<PianoSettingsPageInjected>
-
-export function createPianoSettingsSource(scope: SettingsScope<PianoSettings>): PianoSettingsSource {
-  return {
-    getSnapshot: () => decodeSettings(scope.getSnapshot().value) ?? DEFAULT_SETTINGS,
-    subscribe: (listener) => scope.subscribe(listener),
-  }
-}
 
 interface RangeRowProps {
   label: string

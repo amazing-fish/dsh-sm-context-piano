@@ -8,7 +8,11 @@ export interface PianoSettings {
   maxVisible: number
 }
 
-export const SETTINGS_NAMESPACE = 'sm-context-piano'
+/**
+ * Settings entry id under the DSH 0.1.7 settings contract. Kept aligned with
+ * the former settings namespace so existing stored values migrate as-is.
+ */
+export const SETTINGS_ENTRY_ID = 'sm-context-piano'
 export const PIANO_LANGUAGE_IDS = ['zh', 'en', 'zh-TW'] as const
 export type PianoLanguage = typeof PIANO_LANGUAGE_IDS[number]
 export const DEFAULT_SETTINGS: PianoSettings = {
@@ -67,6 +71,26 @@ export function railHeight(settings: PianoSettings): number {
 export interface PianoSettingsSource {
   getSnapshot(): PianoSettings
   subscribe(listener: () => void): () => void
+}
+
+/**
+ * Scope surface consumed by the settings page. Replaces the `SettingsScope`
+ * type that the removed `settingsScope` service used to provide; under the
+ * 0.1.7 contract it is backed by `remote.settings` (see remote-settings.ts).
+ */
+export interface PianoSettingsSnapshot {
+  status: 'loading' | 'ready' | 'unavailable'
+  writable: boolean
+  revision: number
+  value: PianoSettings
+}
+
+export interface PianoSettingsScope {
+  getSnapshot(): PianoSettingsSnapshot
+  subscribe(listener: () => void): () => void
+  set<K extends keyof PianoSettings & string>(field: K, value: PianoSettings[K]): Promise<void>
+  unset<K extends keyof PianoSettings & string>(field: K): Promise<void>
+  reset(): Promise<void>
 }
 
 export const DEFAULT_SETTINGS_SOURCE: PianoSettingsSource = {

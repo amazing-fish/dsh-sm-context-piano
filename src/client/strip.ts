@@ -15,6 +15,7 @@ import { createNativeNavigation } from './native-navigation.ts'
 import { createSemanticLanding } from './semantic-landing.ts'
 import { SEMANTIC_CSS, semanticLabel, landingFailure } from './semantic-style.ts'
 import type { SmContextPianoKey } from './locales.ts'
+import type { PianoSelectedSessionSource } from './session-probe.tsx'
 import { DEFAULT_SETTINGS, DEFAULT_SETTINGS_SOURCE, railHeight } from '../core/config.ts'
 import type { PianoSettingsSource } from '../core/config.ts'
 
@@ -43,7 +44,7 @@ const DIRTY_ALL = DIRTY_NODES | DIRTY_TURNS | DIRTY_DOM | DIRTY_LAYOUT | DIRTY_N
 const STREAM_SEMANTIC_MIN_INTERVAL_MS = 120
 
 /** Attach to the visible ChatView, never to a background/hidden conversation. */
-export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKey>, settings: PianoSettingsSource = DEFAULT_SETTINGS_SOURCE): () => void {
+export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKey>, selection: PianoSelectedSessionSource, settings: PianoSettingsSource = DEFAULT_SETTINGS_SOURCE): () => void {
   if (typeof document === 'undefined' || typeof MutationObserver === 'undefined' || document.body === null) return () => {}
   let flow: HTMLElement | undefined
   let stop: (() => void) | undefined
@@ -78,7 +79,7 @@ export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKe
     stop = undefined
     flow = next
     if (next !== undefined) {
-      try { stop = mount(ctx, next, t, settings) }
+      try { stop = mount(ctx, next, t, selection, settings) }
       catch { console.warn('[dsh-sm-context-piano] navigator unavailable; native navigation retained') }
     }
     watchLifecycle()
@@ -90,7 +91,7 @@ export function attachKeyStrip(ctx: ClientContext, t: Translate<SmContextPianoKe
   return () => { disposed = true; observer.disconnect(); unsubscribe(); stop?.() }
 }
 
-function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPianoKey>, settings: PianoSettingsSource): () => void {
+function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPianoKey>, selection: PianoSelectedSessionSource, settings: PianoSettingsSource): () => void {
   const local = flow.parentElement
   const scrollport = flow.closest<HTMLElement>('[data-conversation-scroll]') ?? local
   const root = scrollport?.parentElement
@@ -545,7 +546,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     debug.mode = 'piano'; debug.hiddenReason = null; debug.bars = visibleItems.length; debug.windowStart = windowStart
   }
   const bind = (): void => {
-    const id = ctx.sessions.list.getSnapshot().current
+    const id = selection.getSnapshot()
     const next = id === undefined ? undefined : ctx.sessions.binding(id)
     if (next === binding && sourceStop !== undefined) return
     sourceStop?.(); sourceStop = undefined
@@ -772,12 +773,13 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   scrollport.addEventListener('touchstart', readerPointer, { passive: true }); scrollport.addEventListener('pointerdown', readerPointer, { passive: true })
   scrollport.addEventListener('keydown', readerKey)
   const listStop = ctx.sessions.list.subscribe(() => { retries = 0; bind() })
+  const selectedStop = selection.subscribe(() => { retries = 0; bind() })
   const settingsStop = settings.subscribe(() => schedule(DIRTY_NODES | DIRTY_TURNS | DIRTY_LAYOUT | DIRTY_VIEW))
   const dispose = (): void => {
     if (!alive) return
     alive = false; activation++; landing.cancel()
-    if (binding?.session.sessionId === ctx.sessions.list.getSnapshot().current) owner.cancel()
-    owner.release(); sourceStop?.(); listStop(); settingsStop(); structureDom.disconnect(); nativeStructureDom.disconnect(); attributeDom.disconnect(); composerDom?.disconnect(); resize?.disconnect()
+    if (binding?.session.sessionId === selection.getSnapshot()) owner.cancel()
+    owner.release(); sourceStop?.(); listStop(); selectedStop(); settingsStop(); structureDom.disconnect(); nativeStructureDom.disconnect(); attributeDom.disconnect(); composerDom?.disconnect(); resize?.disconnect()
     if (retry !== undefined) clearTimeout(retry)
     clearStreamRefresh(true)
     if (frame !== 0) window.cancelAnimationFrame(frame)

@@ -51,10 +51,11 @@ const session = { ...observable({ loadingOlder: false }), sessionId: 's', projec
 const binding = { session }
 const ctx = {
   locale: { bind: () => (key, args) => key === 'chat.turnNavigation.label' ? 'Turns' : `${key.endsWith('jumpLoad') ? 'Load' : 'Jump'} ${args.turn}` },
-  sessions: { list: observable({ current: 's' }), binding: () => binding },
+  sessions: { list: observable({ ids: ['s'], byId: {}, phase: 'ready', projectionsBySession: {} }), binding: () => binding },
   uiConversation: { binding: () => ({ target: () => target }) },
 }
-const stop = attachKeyStrip(ctx, () => 'Piano')
+const selection = observable('s')
+const stop = attachKeyStrip(ctx, () => 'Piano', selection)
 await new Promise(resolve => setTimeout(resolve, 50))
 assert.equal(document.querySelector('.smcp-unified').hidden, false)
 const nativeButtons = document.querySelectorAll('nav button')
