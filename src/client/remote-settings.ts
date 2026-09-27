@@ -58,11 +58,19 @@ export interface PianoRemoteSettings {
  */
 export function createPianoRemoteSettings(remote: PianoSettingsRemote): PianoRemoteSettings {
   let entry: PianoSettingsEntryView | undefined
+  let described = false
+  /**
+   * Fail-closed value for states where the persisted preference is unknown
+   * (loading, or unavailable before the first successful describe): the rail
+   * must not claim the native navigator until the stored `enabled` value is
+   * known, so a disabled installation is never re-enabled by default.
+   */
+  const unknownSettings = (): PianoSettings => ({ ...DEFAULT_SETTINGS, enabled: false })
   let snapshot: PianoSettingsSnapshot = {
     status: 'loading',
     writable: false,
     revision: 0,
-    value: DEFAULT_SETTINGS,
+    value: unknownSettings(),
   }
   let disposed = false
   let readGeneration = 0
@@ -75,7 +83,7 @@ export function createPianoRemoteSettings(remote: PianoSettingsRemote): PianoRem
       status,
       writable,
       revision: entry?.revision ?? 0,
-      value: entry === undefined ? DEFAULT_SETTINGS : decodeSettings(entry.value) ?? DEFAULT_SETTINGS,
+      value: entry === undefined ? (described ? DEFAULT_SETTINGS : unknownSettings()) : decodeSettings(entry.value) ?? DEFAULT_SETTINGS,
     }
     for (const listener of listeners) listener()
   }
@@ -88,6 +96,7 @@ export function createPianoRemoteSettings(remote: PianoSettingsRemote): PianoRem
       if (!response.ok) throw new Error('settings describe failed')
       const result = response.value
       entry = result.namespaces.find((candidate) => candidate.ns === SETTINGS_ENTRY_ID)
+      described = true
       publish(entry === undefined ? 'unavailable' : 'ready', entry !== undefined && result.writable)
     } catch {
       if (disposed || generation !== readGeneration) return

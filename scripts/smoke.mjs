@@ -5,9 +5,9 @@ import assert from 'node:assert/strict'
 
 const requireHere = createRequire(import.meta.url)
 let passed = 0
-const check = (name, fn) => {
+const check = async (name, fn) => {
   try {
-    fn()
+    await fn()
     passed += 1
     console.log(`  ok  ${name}`)
   } catch (error) {
@@ -164,6 +164,54 @@ check('client apply registers locale, probe slot, settings section, and disposab
   assert.deepEqual(remoteEvents, ['settings/document-updated'])
   assert.ok(describeCalls >= 1, 'settings refresh starts during apply')
   assert.ok(effects >= 4, 'locale, styles, settings-dispose, and strip effects registered')
+})
+
+check('remote settings stay fail-closed while loading or after a failed describe', async () => {
+  let mode = 'fail'
+  const persisted = { language: 'en', enabled: false, keyHeight: 3, keyGap: 16, maxVisible: 8 }
+  const updateListeners = []
+  let settingsSection = null
+  const remote = {
+    settings: {
+      describe: async () => {
+        if (mode === 'fail') throw new Error('settings describe failed')
+        if (mode === 'empty') return { ok: true, value: { namespaces: [], writable: true } }
+        return { ok: true, value: { namespaces: [{ ns: 'sm-context-piano', revision: 3, value: persisted }], writable: true } }
+      },
+      mutate: async () => ({ ok: true, value: { ns: 'sm-context-piano', revision: 4, value: persisted } }),
+    },
+    $on: (event, listener) => {
+      if (event === 'settings/document-updated') updateListeners.push(listener)
+      return () => {}
+    },
+  }
+  exports.apply({
+    effect: fn => { fn(); return () => {} },
+    locale: { register: () => () => {}, bind: () => () => key => key },
+    remote,
+    slots: {
+      inject: (name, callback) => { if (name === 'settings.section') callback() },
+      register: options => { if (options.name === 'settings.section') settingsSection = options },
+    },
+  })
+  const scope = settingsSection.inject().scope
+  assert.equal(scope.getSnapshot().status, 'loading')
+  assert.equal(scope.getSnapshot().value.enabled, false, 'loading must not expose the enabled default')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(scope.getSnapshot().status, 'unavailable')
+  assert.equal(scope.getSnapshot().value.enabled, false, 'a failed initial describe must stay fail-closed')
+  mode = 'empty'
+  for (const listener of updateListeners) listener('sm-context-piano')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(scope.getSnapshot().status, 'unavailable')
+  assert.equal(scope.getSnapshot().value.enabled, true, 'a successful describe without an entry is a fresh install and keeps the enabled default')
+  mode = 'persisted'
+  for (const listener of updateListeners) listener('sm-context-piano')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(scope.getSnapshot().status, 'ready')
+  assert.equal(scope.getSnapshot().value.enabled, false)
+  assert.equal(scope.getSnapshot().value.language, 'en')
+  assert.equal(scope.getSnapshot().value.maxVisible, 8)
 })
 
 console.log(`\n${passed} smoke checks passed${process.exitCode === 1 ? ' (some failed)' : ''}`)
