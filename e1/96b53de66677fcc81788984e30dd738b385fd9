@@ -1,0 +1,16 @@
+scripts/smoke.mjs
+  h_8428784c741401 8,10,169-216
+src/client/remote-settings.ts
+  h_8428784c741401 61-68,73,86,99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "e196b53de66677fcc81788984e30dd738b385fd9",
+  "prompts": {},
+  "humans": {
+    "h_8428784c741401": {
+      "author": "Ziao Huang <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
