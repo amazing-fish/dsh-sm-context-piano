@@ -18,6 +18,7 @@ const state = observable({ openState: 'open', openError: null, hasMore: false, l
 const chat = observable(null)
 const outline = observable([])
 const selection = observable({ current: 's1', byId: { s1: { cwd: '/fixture' } } })
+const activeSession = observable<string | undefined>('s1')
 const settings = observable({ language: 'en', enabled: true, keyHeight: 3, keyGap: 16, maxVisible: 30 })
 let compact = true
 let pending = false
@@ -113,13 +114,13 @@ const props: any = {
 const render = () => app.render(<ChatView key={mounted} {...props} />)
 render(); installStyles()
 const ctx: any = { locale: { bind: () => t }, sessions: { list: selection, binding: () => binding }, uiConversation: { binding: () => ({ target: () => chat }) } }
-const dispose = attachKeyStrip(ctx, (() => 'Piano navigation') as any, settings)
+const dispose = attachKeyStrip(ctx, (() => 'Piano navigation') as any, activeSession, settings)
 ;(window as any).semanticFixture = {
   summary: () => ({ submissionCalls, processOpen: view.getSnapshot().turnProcesses }),
   waiting() { pending = true; state.set({ ...state.getSnapshot(), running: true }); rebuild() },
   answer() { pending = false; state.set({ ...state.getSnapshot(), running: false }); rebuild() },
   normal() { compact = false; mounted++; render() },
   disable() { settings.set({ ...settings.getSnapshot(), enabled: false }) },
-  disappear() { selection.set({ current: undefined, byId: {} }); app.unmount() },
+  disappear() { activeSession.set(undefined); selection.set({ current: undefined, byId: {} }); app.unmount() },
   stop: dispose,
 }
