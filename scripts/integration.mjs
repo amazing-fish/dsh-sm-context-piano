@@ -127,7 +127,17 @@ await import('../lib/client.js')
 const plugin = globalThis.handoff.factory(spec => require(spec))
 plugin.apply(ctx)
 let probeStop = probeActivate('s1')
-await frame()
+// The rail stays fail-closed until remote describe() resolves, then mounts and
+// renders on the next animation frame; poll for that instead of a fixed delay
+// (slow Windows runners overran a single 80ms frame).
+const until = async (ready, what, timeout = 2000) => {
+  const start = Date.now()
+  while (!ready()) {
+    if (Date.now() - start > timeout) throw new Error(`timed out waiting for ${what}`)
+    await new Promise(r => setTimeout(r, 10))
+  }
+}
+await until(() => document.querySelector('.smcp-unified')?.hidden === false, 'the initial Piano mount')
 let passed = 0
 async function check(name, run) { await run(); passed++; console.log(`ok ${passed} - ${name}`) }
 const piano = () => document.querySelector('.smcp-unified')
