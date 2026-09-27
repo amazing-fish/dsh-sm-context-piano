@@ -184,6 +184,17 @@ await check('native navigation replacement is detected and re-owned without doub
   assert.equal(piano().hidden, false)
   assert.equal(replacement.style.getPropertyValue('display'), 'none')
   assert.equal(replacement.getAttribute('aria-hidden'), 'true')
+  // The observer must follow the nested replacement: a later button swap inside
+  // the new surface (here with a drifted label) still has to be reconciled.
+  const liveButton = replacement.querySelector('button[data-test-turn="5"]')
+  const drifted = liveButton.cloneNode(true)
+  drifted.setAttribute('aria-label', 'changed-contract')
+  liveButton.replaceWith(drifted)
+  await frame()
+  assert.equal(piano().hidden, true, 'button replacement inside a replaced nested nav must be reconciled')
+  drifted.replaceWith(liveButton)
+  await frame()
+  assert.equal(piano().hidden, false)
   replacement.replaceWith(native)
   await frame()
   slot.replaceWith(native)

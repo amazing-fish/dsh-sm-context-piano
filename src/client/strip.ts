@@ -717,17 +717,26 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     return false
   }
   let nativeSurface: HTMLElement | null = null
-  const nativeStructureDom = new MutationObserver(() => schedule(DIRTY_DOM | DIRTY_VIEW))
+  let nativeSurfaceParent: HTMLElement | null = null
+  // Rebind first: when the observed slot swaps in a new nav, keep watching the
+  // live surface instead of the detached one.
+  const nativeStructureDom = new MutationObserver(() => {
+    syncNativeSurfaceObserver()
+    schedule(DIRTY_DOM | DIRTY_VIEW)
+  })
   const syncNativeSurfaceObserver = (): void => {
     const next = [...local.querySelectorAll<HTMLElement>('nav,[role="navigation"]')]
       .find(element => !flow.contains(element) && element.getAttribute('aria-label') === nativeT('chat.turnNavigation.label')) ?? null
-    if (next === nativeSurface) return
+    const nextParent = next?.parentElement ?? null
+    // The same nav can be re-slotted under a new wrapper; its parent must be
+    // observed too, or a later in-slot replacement goes unseen.
+    if (next === nativeSurface && nextParent === nativeSurfaceParent) return
     nativeStructureDom.disconnect()
     nativeSurface = next
+    nativeSurfaceParent = nextParent
     if (nativeSurface !== null) {
       nativeStructureDom.observe(nativeSurface, { childList: true, subtree: true })
-      const parent = nativeSurface.parentElement
-      if (parent !== null && parent !== local) nativeStructureDom.observe(parent, { childList: true })
+      if (nextParent !== null && nextParent !== local) nativeStructureDom.observe(nextParent, { childList: true })
     }
   }
   const structureDom = new MutationObserver(records => {
