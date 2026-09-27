@@ -97,6 +97,11 @@ export function createPianoRemoteSettings(remote: PianoSettingsRemote): PianoRem
       const result = response.value
       entry = result.namespaces.find((candidate) => candidate.ns === SETTINGS_ENTRY_ID)
       described = true
+      // A writable document without this entry cannot be written yet: DSH 0.1.7
+      // `describe()` only lists active entries exporting a Config, and
+      // `mutate()` throws "No configurable plugin entry" for any other id.
+      // The entry appears (with `settings/document-updated`) once the host
+      // half activates, so keep controls disabled until then.
       publish(entry === undefined ? 'unavailable' : 'ready', entry !== undefined && result.writable)
     } catch {
       if (disposed || generation !== readGeneration) return
