@@ -61,6 +61,17 @@ await check('host exports the Config schema and opts out of the auto settings fo
   for (const field of ['language', 'enabled', 'keyHeight', 'keyGap', 'maxVisible']) {
     assert.ok(fields.includes(field), `Config must declare ${field}`)
   }
+  for (const [field, { min, max }] of Object.entries({ keyHeight: { min: 1, max: 4 }, keyGap: { min: 6, max: 18 }, maxVisible: { min: 5, max: 30 } })) {
+    // Volatile fields decode into live cells; read the resolved value.
+    assert.equal(host.Config({ [field]: min })[field].get(), min)
+    assert.equal(host.Config({ [field]: max })[field].get(), max)
+    for (const invalid of [min - 1, max + 1, min + 0.5]) {
+      assert.throws(() => host.Config({ [field]: invalid }), undefined, `Config must refuse ${field}=${invalid}`)
+    }
+  }
+  const defaults = host.Config({})
+  assert.deepEqual(Object.fromEntries(Object.entries(defaults).map(([key, cell]) => [key, cell.get()])),
+    { language: 'zh', enabled: true, keyHeight: 2, keyGap: 12, maxVisible: 20 })
   host.apply({
     fiber: {},
     inject: (services, callback) => {
