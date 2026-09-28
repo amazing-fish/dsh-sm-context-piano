@@ -9,7 +9,10 @@ const { document } = window
 Object.assign(globalThis, { window, document, MutationObserver: window.MutationObserver, Event: window.Event })
 globalThis.ResizeObserver = class { observe() {} disconnect() {} }
 window.matchMedia = () => ({ matches: true })
-const frame = async () => { await new Promise(r => setTimeout(r, 80)) }
+// Each frame must cover the full describe -> publish -> mount -> animation
+// frame chain after a settings mutation; 80ms was overrun on slow runners
+// (the startup half of this is covered by the condition-based mount wait).
+const frame = async () => { await new Promise(r => setTimeout(r, 160)) }
 const observable = value => {
   const listeners = new Set()
   return { getSnapshot: () => value, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) },
