@@ -15,7 +15,10 @@ globalThis.ResizeObserver = class {
   disconnect() { this.targets.clear() }
 }
 window.matchMedia = () => ({ matches: true })
-const frame = async () => { await new Promise(r => setTimeout(r, 80)) }
+// Each frame must cover the full describe -> publish -> mount -> animation
+// frame chain after a settings mutation; 80ms was overrun on slow runners
+// (the startup half of this is covered by the condition-based mount wait).
+const frame = async () => { await new Promise(r => setTimeout(r, 160)) }
 const triggerResize = async target => {
   for (const observer of resizeObservers) if (observer.targets.has(target)) observer.callback([{ target }], observer)
   await frame()
