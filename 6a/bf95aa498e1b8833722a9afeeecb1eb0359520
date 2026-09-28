@@ -1,0 +1,14 @@
+scripts/integration.mjs
+  h_8428784c741401 18-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "6abf95aa498e1b8833722a9afeeecb1eb0359520",
+  "prompts": {},
+  "humans": {
+    "h_8428784c741401": {
+      "author": "Ziao Huang <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
