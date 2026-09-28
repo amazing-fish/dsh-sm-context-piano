@@ -1,0 +1,16 @@
+lib/client.js
+  h_72923c199d8741 1-2808
+lib/index.js
+  h_72923c199d8741 1-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "991f10e786f423bfda81dad7b6f734225989aa1c",
+  "prompts": {},
+  "humans": {
+    "h_72923c199d8741": {
+      "author": "Shenyan-DeepSeek-V4.1-Flash <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
