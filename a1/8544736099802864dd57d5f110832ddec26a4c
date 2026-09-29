@@ -1,0 +1,16 @@
+lib/client.js
+  h_8428784c741401 2034,2072-2078,2307-2326,2348-2362,2366-2367
+src/client/strip.ts
+  h_8428784c741401 170,188,422-440,463-476,480
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "a18544736099802864dd57d5f110832ddec26a4c",
+  "prompts": {},
+  "humans": {
+    "h_8428784c741401": {
+      "author": "Ziao Huang <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
