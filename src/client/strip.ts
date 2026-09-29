@@ -463,15 +463,20 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if ((pending & DIRTY_LAYOUT) !== 0 || width === 0) measureLayout()
     const gateFails = (): boolean => !nativeReady || items.length === 0 || width < 520 || left + 70 > flowLeft
     if (gateFails()) {
-      // A taken-over rail can transiently fail a gate on stale layout numbers
-      // (claim/release repaints land mid-frame, and mount-time measurements may
-      // predate the first flow layout). Re-measure once; if the failure is not
-      // transient, tolerate a few consecutive misses before handing the UI
-      // back — falling back on every single bad frame is exactly what flicker is.
-      if (debug.mode === 'piano') {
+      // Layout-only failures while taken over can ride on stale numbers
+      // (claim/release repaints land mid-frame; mount-time measurements may
+      // predate the first flow layout). Re-measure once — a stale-number
+      // failure clears immediately. If the fresh measurement still fails,
+      // tolerate up to 3 consecutive misses, scheduling a follow-up frame per
+      // miss (ResizeObserver fires once per real change; without a re-schedule
+      // the threshold would never be reached) before handing the UI back.
+      // Ownership failures (!nativeReady — reconcile already released the
+      // native surface) and empty items always fall back immediately:
+      // hysteresis is for geometry only.
+      if (debug.mode === 'piano' && nativeReady && items.length !== 0) {
         measureLayout()
         if (!gateFails()) { gateMisses = 0; debug.gateMisses = 0 }
-        else if (++gateMisses <= 3) { debug.gateMisses = gateMisses; return }
+        else if (++gateMisses < 3) { debug.gateMisses = gateMisses; schedule(DIRTY_LAYOUT); return }
       }
       gateMisses = 0; debug.gateMisses = 0
       fallback(!nativeReady ? 'contract' : items.length === 0 ? 'empty' : width < 520 ? 'narrow' : 'overlap')
