@@ -184,7 +184,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let tooltipKey: string | null = null
   const buttons = new Map<string, HTMLButtonElement>()
   const perf = { renders: 0, readerSkips: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, mappedAnchorRebuilds: 0, hitTests: 0, barWrites: 0 }
-  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', perf }
+  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', nativeReject: null as string | null, perf }
   const writeData = (button: HTMLButtonElement, name: string, value: string): void => {
     if (button.dataset[name] === value) return
     button.dataset[name] = value
@@ -229,6 +229,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     closePreview()
     debug.mode = 'native-fallback'
     debug.hiddenReason = reason
+    debug.nativeReject = owner.lastReject
   }
   const schedule = (flags = DIRTY_VIEW): void => {
     dirty |= flags
@@ -543,7 +544,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     status.textContent = localFailure ? landingFailure(config.language)
       : busyTurn !== null ? copy('loading', busyTurn) : failedTurn !== null ? copy('failed', failedTurn) : ''
     strip.hidden = false; owner.claim()
-    debug.mode = 'piano'; debug.hiddenReason = null; debug.bars = visibleItems.length; debug.windowStart = windowStart
+    debug.mode = 'piano'; debug.hiddenReason = null; debug.nativeReject = null; debug.bars = visibleItems.length; debug.windowStart = windowStart
   }
   const bind = (): void => {
     const id = selection.getSnapshot()
@@ -718,6 +719,11 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   }
   let nativeSurface: HTMLElement | null = null
   let nativeSurfaceParent: HTMLElement | null = null
+  // Same scope contract as native-navigation reconcile: DSH 0.1.7 mounts the
+  // TurnNavigator at the [data-conversation-scroll] level, outside
+  // flow.parentElement. Surface discovery, structure and attribute observation
+  // must cover that scope too, or a claimed navigator silently stops syncing.
+  const nativeScope = scrollport ?? local
   // Rebind first: when the observed slot swaps in a new nav, keep watching the
   // live surface instead of the detached one.
   const nativeStructureDom = new MutationObserver(() => {
@@ -725,7 +731,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     schedule(DIRTY_DOM | DIRTY_VIEW)
   })
   const syncNativeSurfaceObserver = (): void => {
-    const next = [...local.querySelectorAll<HTMLElement>('nav,[role="navigation"]')]
+    const next = [...nativeScope.querySelectorAll<HTMLElement>('nav,[role="navigation"]')]
       .find(element => !flow.contains(element) && element.getAttribute('aria-label') === nativeT('chat.turnNavigation.label')) ?? null
     const nextParent = next?.parentElement ?? null
     // The same nav can be re-slotted under a new wrapper; its parent must be
@@ -736,7 +742,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     nativeSurfaceParent = nextParent
     if (nativeSurface !== null) {
       nativeStructureDom.observe(nativeSurface, { childList: true, subtree: true })
-      if (nextParent !== null && nextParent !== local) nativeStructureDom.observe(nextParent, { childList: true })
+      if (nextParent !== null && nextParent !== nativeScope) nativeStructureDom.observe(nextParent, { childList: true })
     }
   }
   const structureDom = new MutationObserver(records => {
@@ -748,7 +754,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   // [data-chat-flow]. Watching only that structural boundary avoids every
   // Markdown/token childList mutation inside a message body.
   structureDom.observe(flow, { childList: true })
-  structureDom.observe(local, { childList: true })
+  structureDom.observe(nativeScope, { childList: true })
   syncNativeSurfaceObserver()
   const attributeDom = new MutationObserver(records => {
     let flags = 0
@@ -766,7 +772,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     }
     if (flags !== 0) schedule(flags)
   })
-  attributeDom.observe(local, { subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy', 'disabled'] })
+  attributeDom.observe(nativeScope, { subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-label', 'aria-current', 'aria-busy', 'disabled'] })
   composerDom = new MutationObserver(records => {
     if (!records.some(record => [...record.addedNodes, ...record.removedNodes].some(touchesComposer))) return
     syncComposerSeat()
