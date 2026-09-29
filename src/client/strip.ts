@@ -473,14 +473,17 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       // Ownership failures (!nativeReady — reconcile already released the
       // native surface) and empty items always fall back immediately:
       // hysteresis is for geometry only.
+      let recovered = false
       if (debug.mode === 'piano' && nativeReady && items.length !== 0) {
         measureLayout()
-        if (!gateFails()) { gateMisses = 0; debug.gateMisses = 0 }
+        if (!gateFails()) recovered = true
         else if (++gateMisses < 3) { debug.gateMisses = gateMisses; schedule(DIRTY_LAYOUT); return }
       }
-      gateMisses = 0; debug.gateMisses = 0
-      fallback(!nativeReady ? 'contract' : items.length === 0 ? 'empty' : width < 520 ? 'narrow' : 'overlap')
-      return
+      if (!recovered) {
+        gateMisses = 0; debug.gateMisses = 0
+        fallback(!nativeReady ? 'contract' : items.length === 0 ? 'empty' : width < 520 ? 'narrow' : 'overlap')
+        return
+      }
     }
     gateMisses = 0; debug.gateMisses = 0
     const readerOnly = (pending & DIRTY_READER) !== 0 && (pending & ~DIRTY_READER) === 0
