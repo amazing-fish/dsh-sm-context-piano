@@ -167,6 +167,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let localFailure = false
   let activation = 0
   let nativeReady = false
+  let gateMisses = 0
   let nativeActiveTurn: number | null = null
   let busyTurn: number | null = null
   let warned = false
@@ -184,7 +185,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let tooltipKey: string | null = null
   const buttons = new Map<string, HTMLButtonElement>()
   const perf = { renders: 0, readerSkips: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, mappedAnchorRebuilds: 0, hitTests: 0, barWrites: 0 }
-  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', nativeReject: null as string | null, perf }
+  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', nativeReject: null as string | null, gateMisses: 0, layout: { left: 0, flowLeft: 0, width: 0, top: 0 }, perf }
   const writeData = (button: HTMLButtonElement, name: string, value: string): void => {
     if (button.dataset[name] === value) return
     button.dataset[name] = value
@@ -418,6 +419,25 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     if (rebuildAllItems) rebuildItemsFromSegments()
     else debug.total = items.length
   }
+  const measureLayout = (): void => {
+    const rootRect = root.getBoundingClientRect()
+    const flowRect = flow.getBoundingClientRect()
+    const scrollRect = scrollport.getBoundingClientRect()
+    flowLeft = flowRect.left - rootRect.left
+    width = root.clientWidth || rootRect.width
+    left = Math.max(16, flowLeft - 108)
+    const config = settings.getSnapshot()
+    const available = Math.max(0, scrollport.clientHeight - (composerSeat?.offsetHeight ?? 0))
+    height = Math.min(railHeight(config), Math.max(config.keyHeight, available - 48))
+    capacity = Math.min(config.maxVisible, Math.max(1, Math.floor((height - config.keyHeight) / config.keyGap) + 1))
+    top = Math.max(8, (scrollRect.top - rootRect.top) + (available - height) / 2)
+    stripViewportTop = rootRect.top + top
+    readingLineY = scrollRect.top + Math.min(120, scrollport.clientHeight * .18)
+    hitTestXs = flowRect.width > 0
+      ? [flowRect.left + flowRect.width / 2, Math.min(flowRect.right - 1, flowRect.left + 18)]
+      : []
+    debug.layout.left = left; debug.layout.flowLeft = flowLeft; debug.layout.width = width; debug.layout.top = top
+  }
   const render = (pending: number): void => {
     perf.renders++
     if ((pending & DIRTY_TURNS) !== 0) {
@@ -440,28 +460,32 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       busyTurn = owner.busy()
       nativeActiveTurn = owner.active()
     }
-    if ((pending & DIRTY_LAYOUT) !== 0 || width === 0) {
-      const rootRect = root.getBoundingClientRect()
-      const flowRect = flow.getBoundingClientRect()
-      const scrollRect = scrollport.getBoundingClientRect()
-      flowLeft = flowRect.left - rootRect.left
-      width = root.clientWidth || rootRect.width
-      left = Math.max(16, flowLeft - 108)
-      const config = settings.getSnapshot()
-      const available = Math.max(0, scrollport.clientHeight - (composerSeat?.offsetHeight ?? 0))
-      height = Math.min(railHeight(config), Math.max(config.keyHeight, available - 48))
-      capacity = Math.min(config.maxVisible, Math.max(1, Math.floor((height - config.keyHeight) / config.keyGap) + 1))
-      top = Math.max(8, (scrollRect.top - rootRect.top) + (available - height) / 2)
-      stripViewportTop = rootRect.top + top
-      readingLineY = scrollRect.top + Math.min(120, scrollport.clientHeight * .18)
-      hitTestXs = flowRect.width > 0
-        ? [flowRect.left + flowRect.width / 2, Math.min(flowRect.right - 1, flowRect.left + 18)]
-        : []
+    if ((pending & DIRTY_LAYOUT) !== 0 || width === 0) measureLayout()
+    const gateFails = (): boolean => !nativeReady || items.length === 0 || width < 520 || left + 70 > flowLeft
+    if (gateFails()) {
+      // Layout-only failures while taken over can ride on stale numbers
+      // (claim/release repaints land mid-frame; mount-time measurements may
+      // predate the first flow layout). Re-measure once — a stale-number
+      // failure clears immediately. If the fresh measurement still fails,
+      // tolerate up to 3 consecutive misses, scheduling a follow-up frame per
+      // miss (ResizeObserver fires once per real change; without a re-schedule
+      // the threshold would never be reached) before handing the UI back.
+      // Ownership failures (!nativeReady — reconcile already released the
+      // native surface) and empty items always fall back immediately:
+      // hysteresis is for geometry only.
+      let recovered = false
+      if (debug.mode === 'piano' && nativeReady && items.length !== 0) {
+        measureLayout()
+        if (!gateFails()) recovered = true
+        else if (++gateMisses < 3) { debug.gateMisses = gateMisses; schedule(DIRTY_LAYOUT); return }
+      }
+      if (!recovered) {
+        gateMisses = 0; debug.gateMisses = 0
+        fallback(!nativeReady ? 'contract' : items.length === 0 ? 'empty' : width < 520 ? 'narrow' : 'overlap')
+        return
+      }
     }
-    if (!nativeReady || items.length === 0 || width < 520 || left + 70 > flowLeft) {
-      fallback(!nativeReady ? 'contract' : items.length === 0 ? 'empty' : width < 520 ? 'narrow' : 'overlap')
-      return
-    }
+    gateMisses = 0; debug.gateMisses = 0
     const readerOnly = (pending & DIRTY_READER) !== 0 && (pending & ~DIRTY_READER) === 0
     if (readerOnly) {
       const nextActive = readingKey() ?? `turn:${nativeActiveTurn ?? turns.at(-1)?.turn}`
