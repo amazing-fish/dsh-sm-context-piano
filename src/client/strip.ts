@@ -184,7 +184,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let tooltipKey: string | null = null
   const buttons = new Map<string, HTMLButtonElement>()
   const perf = { renders: 0, readerSkips: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, mappedAnchorRebuilds: 0, hitTests: 0, barWrites: 0 }
-  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', perf }
+  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', nativeReject: null as string | null, perf }
   const writeData = (button: HTMLButtonElement, name: string, value: string): void => {
     if (button.dataset[name] === value) return
     button.dataset[name] = value
@@ -229,6 +229,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     closePreview()
     debug.mode = 'native-fallback'
     debug.hiddenReason = reason
+    debug.nativeReject = owner.lastReject
   }
   const schedule = (flags = DIRTY_VIEW): void => {
     dirty |= flags
@@ -543,7 +544,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     status.textContent = localFailure ? landingFailure(config.language)
       : busyTurn !== null ? copy('loading', busyTurn) : failedTurn !== null ? copy('failed', failedTurn) : ''
     strip.hidden = false; owner.claim()
-    debug.mode = 'piano'; debug.hiddenReason = null; debug.bars = visibleItems.length; debug.windowStart = windowStart
+    debug.mode = 'piano'; debug.hiddenReason = null; debug.nativeReject = null; debug.bars = visibleItems.length; debug.windowStart = windowStart
   }
   const bind = (): void => {
     const id = selection.getSnapshot()

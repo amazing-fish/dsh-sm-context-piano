@@ -1,7 +1,11 @@
 /**
- * Version-bounded DOM adapter for DSH 0.1.5-rc.2's real TurnNavigator.
+ * Version-bounded DOM adapter for DSH's real TurnNavigator (validated on
+ * 0.1.5-rc.2 and 0.1.7: the navigator slot moved from the flow's parent to
+ * the [data-conversation-scroll] level in 0.1.7, and may render auxiliary
+ * buttons alongside turn buttons).
  * This is NOT an official plugin API. Validate every accessible button
- * before takeover; fail open to the native UI on contract drift.
+ * before takeover; fail open to the native UI on contract drift
+ * (rejection reason surfaced on `lastReject` for diagnosis).
  * No React internals, source patching, copied ChatView, or private RPCs.
  */
 import type { NavigationTurn } from './navigation-model.ts'
@@ -10,7 +14,6 @@ export interface NativeLabels {
   jump(turn: number, unloaded: boolean): string
 }
 interface SavedSurface { nav: HTMLElement; display: string; priority: string; aria: string | null }
-
 export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) {
   const local = flow.parentElement
   const scrollport = flow.closest<HTMLElement>('[data-conversation-scroll]') ?? local
@@ -95,16 +98,25 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
   }
   const api = {
     rowFor, setMappedAnchors, anchorAtOrBefore, release, busy,
+    /** Why the most recent reconcile refused takeover; null when it accepted. */
+    lastReject: null as string | null,
     /** One row scan per publication, never one scan per mark. */
     reconcile(next: readonly NavigationTurn[]): boolean {
       refreshRows()
       turns = next
+      // DSH 0.1.7 mounts the TurnNavigator slot at the [data-conversation-scroll]
+      // level (a sticky overlay beside the flow), no longer inside
+      // flow.parentElement. Search the scrollport — it still contains the flow,
+      // excluded below — so 0.1.5 and 0.1.7 layouts both resolve.
+      const scope = scrollport ?? local
       // Do not mistake an unmatched/ambiguous native landmark for the genuine
       // absence that the official single-Turn renderer normally produces.
-      const surfaces = [...local?.querySelectorAll<HTMLElement>('nav,[role="navigation"]') ?? []]
+      const surfaces = [...scope?.querySelectorAll<HTMLElement>('nav,[role="navigation"]') ?? []]
         .filter(element => !flow.contains(element))
       const candidates = surfaces.filter(element => element.getAttribute('aria-label') === labels.navigation())
       const candidate = surfaces.length === 1 && candidates.length === 1 ? candidates[0] : null
+      if (surfaces.length !== 1) api.lastReject = `surfaces:${surfaces.length}`
+      else if (candidate === null) api.lastReject = 'label-mismatch'
       const nextButtons = new Map<number, HTMLButtonElement>()
       if (candidate !== null) {
         const all = [...candidate.querySelectorAll<HTMLButtonElement>('button')]
@@ -116,17 +128,24 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         }
         for (const turn of turns) {
           const matches = byLabel.get(labels.jump(turn.turn, turn.anchor.kind === 'unloaded')) ?? []
-          if (matches.length !== 1 || matches[0].disabled) { release(); nav = null; buttons.clear(); return false }
+          if (matches.length !== 1 || matches[0].disabled) {
+            api.lastReject = `button-match:turn${turn.turn}:${matches.length}:${turn.anchor.kind}`
+            release(); nav = null; buttons.clear(); return false
+          }
           nextButtons.set(turn.turn, matches[0])
         }
-        if (all.length !== turns.length) { release(); nav = null; buttons.clear(); return false }
+        // 0.1.5 asserted all.length === turns.length; 0.1.7's navigator may
+        // render auxiliary buttons. Every turn already has exactly one enabled
+        // match above, so surplus buttons cannot corrupt the mapping.
       } else if (surfaces.length !== 0 || turns.length > 1 || turns.some(turn => turn.anchor.kind === 'unloaded')) {
+        if (api.lastReject === null) api.lastReject = `absent-nav:turns${turns.length}`
         release(); nav = null; buttons.clear(); return false
       }
       if (candidate !== nav) release()
       nav = candidate
       buttons = nextButtons
       issuedUnloaded = false
+      api.lastReject = null
       return true
     },
     claim(): void {
