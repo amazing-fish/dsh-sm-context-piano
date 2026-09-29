@@ -1,0 +1,16 @@
+lib/client.js
+  h_72923c199d8741 2651,2657,2668,2677,2693
+src/client/strip.ts
+  h_72923c199d8741 721-725,733,744,756,774
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "ef5ff91160f7cf6ecd4d881e8b3617aacb7ef198",
+  "prompts": {},
+  "humans": {
+    "h_72923c199d8741": {
+      "author": "Shenyan-DeepSeek-V4.1-Flash <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
