@@ -1,0 +1,18 @@
+lib/client.js
+  h_72923c199d8741 1529-1530,1535,1538-1539,1553,1562,1572,2070,2114,2427
+src/client/native-navigation.ts
+  h_72923c199d8741 2-5,7-8,101-102,107-111,114,118-119,131-134,137-139,141,148
+src/client/strip.ts
+  h_72923c199d8741 187,232,547
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "12ed6ef21a0a41a45b736f2e9788b83b1966c9ad",
+  "prompts": {},
+  "humans": {
+    "h_72923c199d8741": {
+      "author": "Shenyan-DeepSeek-V4.1-Flash <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
