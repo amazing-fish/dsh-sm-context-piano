@@ -101,6 +101,9 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     navigation: () => nativeT('chat.turnNavigation.label'),
     jump: (turn, unloaded) => nativeT(unloaded ? 'chat.turnNavigation.jumpLoad' : 'chat.turnNavigation.jump', { turn }),
   })
+  // The empty-window hold drives its own rechecks; when one surrenders or
+  // recovers outside our render flow, our cached nativeReady/mode is stale.
+  owner.onExternalReconcile = () => { schedule(DIRTY_DOM | DIRTY_NATIVE_STATE | DIRTY_VIEW) }
   const landing = createSemanticLanding(flow, owner)
   const prefix = `smcp-${++instanceCount}-`
   const strip = document.createElement('div')

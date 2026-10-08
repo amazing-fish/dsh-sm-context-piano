@@ -3,6 +3,17 @@ import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
 import { createNativeNavigation } from '../src/client/native-navigation.ts'
 let passed = 0
+// Async tests mock globalThis timers (performance.now, rAF); run every test
+// serially so concurrent mocks cannot leak into each other's rAF chains.
+let chain = Promise.resolve()
+function test(name, run) {
+  const f = fixture()
+  chain = Promise.resolve(chain).then(() => {
+    const result = run(f)
+    if (result != null && typeof result.then === 'function') return result
+  }).then(() => { passed++; console.log(`ok ${passed} - ${name}`); f.stop() },
+    error => { console.error(error); console.log(`not ok - ${name}`); process.exitCode = 1; f.stop() })
+}
 const labels = { navigation: () => 'Turns', jump: (turn, unloaded) => `${unloaded ? 'Load' : 'Jump'} ${turn}` }
 const turn = (n, loaded = true) => ({ turn: n, prompt: '', response: '', anchor: loaded ? { kind: 'loaded', key: `u${n}` } : { kind: 'unloaded', seq: n * 100 } })
 function fixture() {
@@ -27,7 +38,6 @@ function fixture() {
   }
   return { dom, document, flow, scroll, owner, addNav, stop() { owner.release(); dom.window.close(); globalThis.Event = previousEvent } }
 }
-function test(name, run) { const f = fixture(); try { run(f); passed++; console.log(`ok ${passed} - ${name}`) } finally { f.stop() } }
 
 test('genuinely absent native rail permits one fully loaded Turn', f => {
   assert.equal(f.owner.reconcile([turn(1)]), true)
@@ -45,19 +55,21 @@ test('an unlabeled or role-based native landmark also prevents duplicate UI', f 
   const nav = f.document.createElement('div'); nav.setAttribute('role', 'navigation'); f.flow.before(nav)
   assert.equal(f.owner.reconcile([turn(1)]), false)
 })
-test('takeover restores original inline style and accessibility values exactly', f => {
+test('takeover hides with visibility (keeps the virtualizer box) and restores exactly', f => {
   const nav = f.addNav([turn(1), turn(2)])
-  nav.style.setProperty('display', 'grid', 'important'); nav.setAttribute('aria-hidden', 'false')
+  nav.style.setProperty('visibility', 'visible', 'important'); nav.setAttribute('aria-hidden', 'false')
   assert.equal(f.owner.reconcile([turn(1), turn(2)]), true); f.owner.claim()
-  assert.equal(nav.style.display, 'none'); assert.equal(nav.getAttribute('aria-hidden'), 'true')
-  f.owner.release(); assert.equal(nav.style.display, 'grid'); assert.equal(nav.style.getPropertyPriority('display'), 'important')
+  // display:none would collapse the official virtualizer's ResizeObserver
+  // border box to 0x0 and unmount every turn button; visibility keeps it.
+  assert.equal(nav.style.visibility, 'hidden'); assert.equal(nav.getAttribute('aria-hidden'), 'true')
+  f.owner.release(); assert.equal(nav.style.visibility, 'visible'); assert.equal(nav.style.getPropertyPriority('visibility'), 'important')
   assert.equal(nav.getAttribute('aria-hidden'), 'false')
 })
 test('contract drift after takeover restores the native element', f => {
   const nav = f.addNav([turn(1), turn(2)])
   f.owner.reconcile([turn(1), turn(2)]); f.owner.claim(); nav.setAttribute('aria-label', 'changed')
   assert.equal(f.owner.reconcile([turn(1), turn(2)]), false)
-  assert.equal(nav.style.display, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
+  assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
 })
 test('Escape-equivalent cancellation before aria-busy commits still supersedes the jump', f => {
   const items = [turn(1, false), turn(2)]
@@ -123,4 +135,117 @@ test('after publication real native busy remains cancellable until settlement', 
   f.owner.cancel(); assert.equal(cancelClicks, 1)
   f.owner.reconcile(items); f.owner.cancel(); assert.equal(cancelClicks, 1)
 })
+test('a partially rendered window whose every button drifted fails open, never holds', f => {
+  // 5 turns, only 2 buttons rendered (virtualized window) — both drifted.
+  const items = [turn(1), turn(2), turn(3), turn(4), turn(5)]
+  const nav = f.addNav([turn(9), turn(9)], 'Turns')
+  assert.equal(f.owner.reconcile(items), false)
+  assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
+  assert.match(f.owner.lastReject, /button-match:unrecognized:2/)
+})
+test('a mixed partial window (one valid button plus one drifted label) fails open', f => {
+  // 3 turns; the window renders turn 2's valid button and one drifted button.
+  const items = [turn(1, false), turn(2), turn(3)]
+  const nav = f.addNav([turn(2), turn(9)], 'Turns')
+  assert.equal(f.owner.reconcile(items), false)
+  assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
+  assert.match(f.owner.lastReject, /button-match:unrecognized:2/)
+})
+test('a fully collapsed window holds the takeover, refills, and degrades to fail open past the deadline', f => {
+  const items = [turn(1), turn(2), turn(3)]
+  const nav = f.addNav(items)
+  f.owner.reconcile(items); f.owner.claim()
+  assert.equal(nav.style.visibility, 'hidden')
+  // Virtualizer collapse: every button unmounts at once, surface stays alive.
+  for (const button of [...nav.querySelectorAll('button')]) button.remove()
+  assert.equal(f.owner.reconcile(items), true, 'empty window holds the takeover')
+  assert.equal(f.owner.lastReject, null)
+  assert.match(f.owner.lastSkip, /empty-window:1/)
+  assert.equal(nav.style.visibility, 'hidden', 'no release during the hold')
+  // Refill within the deadline: full mapping resumes.
+  for (const item of items) {
+    const button = f.document.createElement('button')
+    button.setAttribute('aria-label', labels.jump(item.turn, false))
+    nav.append(button)
+  }
+  assert.equal(f.owner.reconcile(items), true)
+  assert.equal(f.owner.lastSkip, null); assert.equal(f.owner.lastReject, null)
+  assert.equal(nav.style.visibility, 'hidden')
+  // Collapse again and ride the wall-clock deadline to fail open.
+  for (const button of [...nav.querySelectorAll('button')]) button.remove()
+  const started = performance.now()
+  const realNow = performance.now.bind(performance)
+  let virtualNow = started
+  const now = performance.now
+  performance.now = () => virtualNow
+  try {
+    assert.equal(f.owner.reconcile(items), true, 'second collapse still holds at first')
+    virtualNow = realNow() + 1600
+    assert.equal(f.owner.reconcile(items), false, 'past the deadline the takeover fails open')
+    assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
+    assert.match(f.owner.lastReject, /button-match:none:skipped3/)
+  } finally { performance.now = now }
+})
+test('the empty-window self-driven recheck notifies the strip on hold, recovery, and surrender', async f => {
+  const globalRaf = globalThis.requestAnimationFrame
+  globalThis.requestAnimationFrame = cb => { setTimeout(() => cb(performance.now()), 0); return 0 }
+  try {
+    const items = [turn(1), turn(2)]
+    const nav = f.addNav(items)
+    f.owner.reconcile(items); f.owner.claim()
+    let notified = 0
+    f.owner.onExternalReconcile = () => { notified++ }
+    // Passive reconcile (strip-driven) must not notify.
+    f.owner.reconcile(items); assert.equal(notified, 0)
+    for (const button of [...nav.querySelectorAll('button')]) button.remove()
+    assert.equal(f.owner.reconcile(items), true)
+    await new Promise(ok => setTimeout(ok, 5))
+    assert.ok(notified >= 1, 'self-driven hold recheck notifies')
+    assert.ok(f.owner.lastSkip.startsWith('empty-window'), 'still holding while empty')
+    assert.equal(nav.style.visibility, 'hidden')
+    // Refill: the self-driven reconcile recovers the mapping and notifies.
+    for (const item of items) {
+      const button = f.document.createElement('button')
+      button.setAttribute('aria-label', labels.jump(item.turn, false))
+      nav.append(button)
+    }
+    await new Promise(ok => setTimeout(ok, 20))
+    assert.ok(notified >= 2, 'recovery recheck notifies')
+    assert.equal(f.owner.lastSkip, null); assert.equal(f.owner.lastReject, null)
+    assert.equal(nav.style.visibility, 'hidden')
+  } finally { globalThis.requestAnimationFrame = globalRaf }
+})
+test('reclaiming an emptied surface after a fallback resumes the deadline supervision', async f => {
+  const globalRaf = globalThis.requestAnimationFrame
+  globalThis.requestAnimationFrame = cb => { setTimeout(() => cb(performance.now()), 0); return 0 }
+  try {
+    const items = [turn(1), turn(2)]
+    const nav = f.addNav(items)
+    f.owner.reconcile(items); f.owner.claim()
+    for (const button of [...nav.querySelectorAll('button')]) button.remove()
+    assert.equal(f.owner.reconcile(items), true, 'hold begins')
+    // Temporary geometry fallback: the strip releases us mid-hold.
+    f.owner.release()
+    assert.equal(nav.style.visibility, '')
+    // Layout-only recovery: the strip reclaims with cached readiness and no
+    // reconcile — claim() must resume supervision of the emptied surface.
+    f.owner.claim()
+    assert.equal(nav.style.visibility, 'hidden', 'reclaimed')
+    // Let the self-driven chain run past the deadline: it must fail open.
+    const started = performance.now()
+    const now = performance.now
+    performance.now = () => started + 1600
+    try {
+      let settled = false
+      for (let i = 0; i < 8 && !settled; i++) {
+        await new Promise(ok => setTimeout(ok, 5))
+        if (f.owner.lastReject !== null || nav.style.visibility === '') settled = true
+      }
+      assert.equal(nav.style.visibility, '', 'deadline lapse surrenders the reclaimed empty surface')
+      assert.equal(nav.hasAttribute('aria-hidden'), false)
+      assert.match(f.owner.lastReject ?? '', /button-match:none:skipped2/)
+    } finally { performance.now = now }
+  } finally { globalThis.requestAnimationFrame = globalRaf }
+})
+await chain
 console.log(`${passed} native navigation boundary tests passed`)

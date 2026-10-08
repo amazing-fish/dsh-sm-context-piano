@@ -13,12 +13,13 @@ export interface NativeLabels {
   navigation(): string
   jump(turn: number, unloaded: boolean): string
 }
-interface SavedSurface { nav: HTMLElement; display: string; priority: string; aria: string | null }
+interface SavedSurface { nav: HTMLElement; visibility: string; priority: string; aria: string | null }
 export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) {
   const local = flow.parentElement
   const scrollport = flow.closest<HTMLElement>('[data-conversation-scroll]') ?? local
   let nav: HTMLElement | null = null
   let saved: SavedSurface | undefined
+  let emptyWindow = 0
   let buttons = new Map<number, HTMLButtonElement>()
   let turns: readonly NavigationTurn[] = []
   let rows = new Map<string, HTMLElement>()
@@ -53,9 +54,9 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     if (saved === undefined) return
     const old = saved
     saved = undefined
-    if (old.nav.style.getPropertyValue('display') === 'none' && old.nav.style.getPropertyPriority('display') === 'important') {
-      if (old.display) old.nav.style.setProperty('display', old.display, old.priority)
-      else old.nav.style.removeProperty('display')
+    if (old.nav.style.getPropertyValue('visibility') === 'hidden' && old.nav.style.getPropertyPriority('visibility') === 'important') {
+      if (old.visibility) old.nav.style.setProperty('visibility', old.visibility, old.priority)
+      else old.nav.style.removeProperty('visibility')
     }
     if (old.nav.getAttribute('aria-hidden') === 'true') {
       if (old.aria === null) old.nav.removeAttribute('aria-hidden')
@@ -100,12 +101,39 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
    *  of our partial map (Piano-issued or native-issued jumps alike). The
    *  cancellation gate must not depend on map visibility. */
   const hasNativeBusy = (): boolean => nav !== null && nav.querySelector('button[aria-busy="true"]') !== null
+  let emptySince: number | null = null
+  let emptyRecheckScheduled = false
   const api = {
     rowFor, setMappedAnchors, anchorAtOrBefore, release, busy,
     /** Why the most recent reconcile refused takeover; null when it accepted. */
     lastReject: null as string | null,
     /** How many turns the most recent reconcile left unmapped (virtualized-out buttons); null when none. */
     lastSkip: null as string | null,
+    /** Set by the strip: a self-driven recheck (empty-window hold) changed
+     *  the takeover state outside the strip's render flow, so its cached
+     *  nativeReady/mode is stale and it must schedule a re-render. Passive
+     *  reconcile calls from the strip itself do NOT fire this. */
+    onExternalReconcile: null as (() => void) | null,
+    /** While holding an empty virtualizer window, drive the recheck ourselves:
+     *  child-list mutations stop firing once every button is gone, so nobody
+     *  else would re-run reconcile to notice the refill or the deadline. */
+    scheduleEmptyRecheck(): void {
+      if (emptyRecheckScheduled) return
+      emptyRecheckScheduled = true
+      const raf = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (callback: FrameRequestCallback) => { setTimeout(() => callback(performance.now()), 16); return 0 }
+      raf(() => {
+        emptyRecheckScheduled = false
+        if (saved !== undefined) {
+          // Both outcomes leave the strip's cached nativeReady stale: a
+          // surrender released the native surface it still thinks it owns,
+          // a recovery refilled the mapping it thinks is empty.
+          api.reconcile(turns)
+          api.onExternalReconcile?.()
+        }
+      })
+    },
     /** One row scan per publication, never one scan per mark. */
     reconcile(next: readonly NavigationTurn[]): boolean {
       refreshRows()
@@ -143,9 +171,16 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         // label, is an explicit official state and fails open — that is the
         // disabled-state contract asserted by scripts/integration.mjs.
         let skipped = 0
+        const claimed = new Set<HTMLButtonElement>()
+        // When the surface renders at least one button per turn, an absent
+        // label is label drift on a rendered button (contract break — fail
+        // open). When it renders fewer, the virtualization window is simply
+        // not covering every turn: absence is a transient window fact.
+        const plentiful = all.length >= turns.length
         for (const turn of turns) {
           const primary = byLabel.get(labels.jump(turn.turn, turn.anchor.kind === 'unloaded')) ?? []
           const alternate = byLabel.get(labels.jump(turn.turn, turn.anchor.kind !== 'unloaded')) ?? []
+          for (const list of [primary, alternate]) for (const button of list) claimed.add(button)
           let button: HTMLButtonElement | null = null
           let absent = true
           let rendered = 0
@@ -156,7 +191,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
             if (list.length === 1 && !list[0].disabled) { button = list[0]; break }
           }
           if (button !== null) { nextButtons.set(turn.turn, button); continue }
-          if (absent) { skipped++; continue }
+          if (absent && !plentiful) { skipped++; continue }
           // Rendered but unmappable. A sole mid-load button (disabled while
           // carrying aria-busy) is the transient load state of an unloaded
           // jump — skip until it settles; anything else fails open.
@@ -165,14 +200,52 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
           api.lastReject = `button-match:turn${turn.turn}:${rendered}:${turn.anchor.kind}`
           release(); nav = null; buttons.clear(); return false
         }
-        api.lastSkip = skipped === 0 ? null : `skipped:${skipped}`
-        if (nextButtons.size === 0) {
-          api.lastReject = `button-match:none:skipped${skipped}`
+        // Every rendered button must be consumed by a recognized turn
+        // mapping. A mixed partial window (one valid button + one drifted
+        // label) would otherwise take over while hiding the drifted control:
+        // an unloaded turn's load entry point would vanish behind a disabled
+        // Piano key. Unrecognized buttons always fail open. (Neither 0.1.5
+        // nor 0.1.7 renders auxiliary buttons inside the nav — the old
+        // all.length === turns.length contract held on 0.1.5 precisely
+        // because turn marks were the only buttons there.)
+        for (const button of all) {
+          if (claimed.has(button)) continue
+          api.lastReject = `button-match:unrecognized:${all.length}`
           release(); nav = null; buttons.clear(); return false
         }
-        // 0.1.5 asserted all.length === turns.length; 0.1.7's navigator may
-        // render auxiliary buttons. Every mapped turn already has exactly one
-        // enabled match above, so surplus buttons cannot corrupt the mapping.
+        api.lastSkip = skipped === 0 ? null : `skipped:${skipped}`
+        if (nextButtons.size === 0) {
+          // A demonstrably empty window: not one button rendered at all
+          // (all.length === 0) and every turn skipped — the virtualizer
+          // collapsed. Releasing here would flash the native shell and
+          // re-feed the takeover oscillation; hold the takeover on a wall-clock
+          // budget (~1.5s) instead. Keys without mapped buttons degrade via
+          // hasButton()/row scrolling; stale map entries fail their
+          // isConnected checks once React swaps the nodes out. A nonempty
+          // surface with no mappable button (drifted labels, unknown controls)
+          // never enters this branch — it fails open below.
+          const empty = all.length === 0 && skipped === turns.length && turns.length > 0
+          const now = performance.now()
+          if (empty && (emptySince === null ? (emptySince = now, true) : now - emptySince < 1500)) {
+            emptyWindow++
+            api.lastSkip = `empty-window:${emptyWindow}`
+            api.lastReject = null
+            api.scheduleEmptyRecheck()
+            if (candidate === nav) return true
+            release(); nav = null; buttons.clear(); return false
+          }
+          api.lastReject = `button-match:none:skipped${skipped}`
+          emptySince = null
+          release(); nav = null; buttons.clear(); return false
+        }
+        emptyWindow = 0
+        emptySince = null
+        // 0.1.5 asserted all.length === turns.length. Verified against
+        // upstream 0.1.7-rc.2 (TurnNavigator.tsx): its nav renders exactly one
+        // TurnMark button per virtualized turn and a non-button preview div —
+        // no auxiliary buttons. 0.1.5-era surfaces may carry auxiliary
+        // controls; every mapped turn already has exactly one enabled match
+        // above, so surplus buttons cannot corrupt the mapping.
       } else if (surfaces.length !== 0 || turns.length > 1 || turns.some(turn => turn.anchor.kind === 'unloaded')) {
         if (api.lastReject === null) api.lastReject = `absent-nav:turns${turns.length}`
         release(); nav = null; buttons.clear(); return false
@@ -186,10 +259,25 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     },
     claim(): void {
       if (nav === null || saved?.nav === nav) return
-      saved = { nav, display: nav.style.getPropertyValue('display'), priority: nav.style.getPropertyPriority('display'), aria: nav.getAttribute('aria-hidden') }
+      saved = { nav, visibility: nav.style.getPropertyValue('visibility'), priority: nav.style.getPropertyPriority('visibility'), aria: nav.getAttribute('aria-hidden') }
       // Keep the original React owner callable while exposing only Piano.
-      nav.style.setProperty('display', 'none', 'important')
+      // Hide with visibility, NOT display: none — display:none removes the
+      // layout box, and 0.1.7's virtualized navigator collapses its rendered
+      // button window to empty when its buttons stop intersecting. The hidden
+      // surface kept that window alive through every takeover frame, which
+      // alternated takeover and surrender at rAF rate (skipped:N == all).
+      nav.style.setProperty('visibility', 'hidden', 'important')
       nav.setAttribute('aria-hidden', 'true')
+      // A temporary geometry fallback released us mid-hold, which stops the
+      // self-driven recheck (its gate is saved !== undefined). Reclaiming
+      // must not blindly trust the strip's cached readiness: if the surface
+      // is still empty, resume the deadline supervision here — otherwise an
+      // empty navigator could be owned indefinitely with nobody left to
+      // notice the lapse.
+      if (nav.querySelector('button') === null && turns.length > 0) {
+        if (emptySince === null) emptySince = performance.now()
+        api.scheduleEmptyRecheck()
+      }
       // Scrollbar dragging and selecting transcript text are reader intent
       // too; these need not emit wheel, touchstart or a navigation key.
       scrollport?.addEventListener('pointerdown', readerPointer, { passive: true })
