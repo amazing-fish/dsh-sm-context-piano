@@ -3,6 +3,17 @@ import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
 import { createNativeNavigation } from '../src/client/native-navigation.ts'
 let passed = 0
+const pending = []
+function test(name, run) {
+  const f = fixture()
+  let result
+  try { result = run(f) }
+  catch (error) { f.stop(); throw error }
+  if (result != null && typeof result.then === 'function') {
+    pending.push(result.then(() => { passed++; console.log(`ok ${passed} - ${name}`); f.stop() },
+      error => { console.error(error); console.log(`not ok - ${name}`); process.exitCode = 1; f.stop() }))
+  } else { passed++; console.log(`ok ${passed} - ${name}`); f.stop() }
+}
 const labels = { navigation: () => 'Turns', jump: (turn, unloaded) => `${unloaded ? 'Load' : 'Jump'} ${turn}` }
 const turn = (n, loaded = true) => ({ turn: n, prompt: '', response: '', anchor: loaded ? { kind: 'loaded', key: `u${n}` } : { kind: 'unloaded', seq: n * 100 } })
 function fixture() {
@@ -27,7 +38,6 @@ function fixture() {
   }
   return { dom, document, flow, scroll, owner, addNav, stop() { owner.release(); dom.window.close(); globalThis.Event = previousEvent } }
 }
-function test(name, run) { const f = fixture(); try { run(f); passed++; console.log(`ok ${passed} - ${name}`) } finally { f.stop() } }
 
 test('genuinely absent native rail permits one fully loaded Turn', f => {
   assert.equal(f.owner.reconcile([turn(1)]), true)
@@ -168,4 +178,34 @@ test('a fully collapsed window holds the takeover, refills, and degrades to fail
     assert.match(f.owner.lastReject, /button-match:none:skipped3/)
   } finally { performance.now = now }
 })
+test('the empty-window self-driven recheck notifies the strip on hold, recovery, and surrender', async f => {
+  const globalRaf = globalThis.requestAnimationFrame
+  globalThis.requestAnimationFrame = cb => { setTimeout(() => cb(performance.now()), 0); return 0 }
+  try {
+    const items = [turn(1), turn(2)]
+    const nav = f.addNav(items)
+    f.owner.reconcile(items); f.owner.claim()
+    let notified = 0
+    f.owner.onExternalReconcile = () => { notified++ }
+    // Passive reconcile (strip-driven) must not notify.
+    f.owner.reconcile(items); assert.equal(notified, 0)
+    for (const button of [...nav.querySelectorAll('button')]) button.remove()
+    assert.equal(f.owner.reconcile(items), true)
+    await new Promise(ok => setTimeout(ok, 5))
+    assert.ok(notified >= 1, 'self-driven hold recheck notifies')
+    assert.ok(f.owner.lastSkip.startsWith('empty-window'), 'still holding while empty')
+    assert.equal(nav.style.visibility, 'hidden')
+    // Refill: the self-driven reconcile recovers the mapping and notifies.
+    for (const item of items) {
+      const button = f.document.createElement('button')
+      button.setAttribute('aria-label', labels.jump(item.turn, false))
+      nav.append(button)
+    }
+    await new Promise(ok => setTimeout(ok, 20))
+    assert.ok(notified >= 2, 'recovery recheck notifies')
+    assert.equal(f.owner.lastSkip, null); assert.equal(f.owner.lastReject, null)
+    assert.equal(nav.style.visibility, 'hidden')
+  } finally { globalThis.requestAnimationFrame = globalRaf }
+})
+await Promise.all(pending)
 console.log(`${passed} native navigation boundary tests passed`)

@@ -109,6 +109,11 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     lastReject: null as string | null,
     /** How many turns the most recent reconcile left unmapped (virtualized-out buttons); null when none. */
     lastSkip: null as string | null,
+    /** Set by the strip: a self-driven recheck (empty-window hold) changed
+     *  the takeover state outside the strip's render flow, so its cached
+     *  nativeReady/mode is stale and it must schedule a re-render. Passive
+     *  reconcile calls from the strip itself do NOT fire this. */
+    onExternalReconcile: null as (() => void) | null,
     /** While holding an empty virtualizer window, drive the recheck ourselves:
      *  child-list mutations stop firing once every button is gone, so nobody
      *  else would re-run reconcile to notice the refill or the deadline. */
@@ -120,7 +125,13 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         : (callback: FrameRequestCallback) => { setTimeout(() => callback(performance.now()), 16); return 0 }
       raf(() => {
         emptyRecheckScheduled = false
-        if (saved !== undefined) api.reconcile(turns)
+        if (saved !== undefined) {
+          // Both outcomes leave the strip's cached nativeReady stale: a
+          // surrender released the native surface it still thinks it owns,
+          // a recovery refilled the mapping it thinks is empty.
+          api.reconcile(turns)
+          api.onExternalReconcile?.()
+        }
       })
     },
     /** One row scan per publication, never one scan per mark. */
