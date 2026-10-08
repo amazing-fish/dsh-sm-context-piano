@@ -100,6 +100,8 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     rowFor, setMappedAnchors, anchorAtOrBefore, release, busy,
     /** Why the most recent reconcile refused takeover; null when it accepted. */
     lastReject: null as string | null,
+    /** How many turns the most recent reconcile left unmapped (virtualized-out buttons); null when none. */
+    lastSkip: null as string | null,
     /** One row scan per publication, never one scan per mark. */
     reconcile(next: readonly NavigationTurn[]): boolean {
       refreshRows()
@@ -126,17 +128,30 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
           const entries = byLabel.get(label) ?? []
           entries.push(button); byLabel.set(label, entries)
         }
+        // 0.1.7's navigator virtualizes its button list: edge turns (typically
+        // turn 1) enter and leave the rendered window every frame. A missing
+        // button for one turn is therefore a transient rendering-window fact,
+        // not a contract break — map what is rendered, skip the rest; the next
+        // reconcile re-maps the full set once the window covers it. The kind
+        // is our inference too: when the official side has already (not yet)
+        // loaded the turn, try the other label variant before skipping.
+        let skipped = 0
         for (const turn of turns) {
-          const matches = byLabel.get(labels.jump(turn.turn, turn.anchor.kind === 'unloaded')) ?? []
-          if (matches.length !== 1 || matches[0].disabled) {
-            api.lastReject = `button-match:turn${turn.turn}:${matches.length}:${turn.anchor.kind}`
-            release(); nav = null; buttons.clear(); return false
-          }
-          nextButtons.set(turn.turn, matches[0])
+          const pick = (list: HTMLButtonElement[]): HTMLButtonElement | null => list.length === 1 && !list[0].disabled ? list[0] : null
+          const primary = byLabel.get(labels.jump(turn.turn, turn.anchor.kind === 'unloaded')) ?? []
+          const alternate = byLabel.get(labels.jump(turn.turn, turn.anchor.kind !== 'unloaded')) ?? []
+          const button = pick(primary) ?? pick(alternate)
+          if (button !== null) nextButtons.set(turn.turn, button)
+          else skipped++
+        }
+        api.lastSkip = skipped === 0 ? null : `skipped:${skipped}`
+        if (nextButtons.size === 0) {
+          api.lastReject = `button-match:none:skipped${skipped}`
+          release(); nav = null; buttons.clear(); return false
         }
         // 0.1.5 asserted all.length === turns.length; 0.1.7's navigator may
-        // render auxiliary buttons. Every turn already has exactly one enabled
-        // match above, so surplus buttons cannot corrupt the mapping.
+        // render auxiliary buttons. Every mapped turn already has exactly one
+        // enabled match above, so surplus buttons cannot corrupt the mapping.
       } else if (surfaces.length !== 0 || turns.length > 1 || turns.some(turn => turn.anchor.kind === 'unloaded')) {
         if (api.lastReject === null) api.lastReject = `absent-nav:turns${turns.length}`
         release(); nav = null; buttons.clear(); return false
