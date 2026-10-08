@@ -125,4 +125,47 @@ test('after publication real native busy remains cancellable until settlement', 
   f.owner.cancel(); assert.equal(cancelClicks, 1)
   f.owner.reconcile(items); f.owner.cancel(); assert.equal(cancelClicks, 1)
 })
+test('a partially rendered window whose every button drifted fails open, never holds', f => {
+  // 5 turns, only 2 buttons rendered (virtualized window) — both drifted.
+  const items = [turn(1), turn(2), turn(3), turn(4), turn(5)]
+  const nav = f.addNav([turn(9), turn(9)], 'Turns')
+  assert.equal(f.owner.reconcile(items), false)
+  assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
+  assert.match(f.owner.lastReject, /button-match:none:skipped5/)
+})
+test('a fully collapsed window holds the takeover, refills, and degrades to fail open past the deadline', f => {
+  const items = [turn(1), turn(2), turn(3)]
+  const nav = f.addNav(items)
+  f.owner.reconcile(items); f.owner.claim()
+  assert.equal(nav.style.visibility, 'hidden')
+  // Virtualizer collapse: every button unmounts at once, surface stays alive.
+  for (const button of [...nav.querySelectorAll('button')]) button.remove()
+  assert.equal(f.owner.reconcile(items), true, 'empty window holds the takeover')
+  assert.equal(f.owner.lastReject, null)
+  assert.match(f.owner.lastSkip, /empty-window:1/)
+  assert.equal(nav.style.visibility, 'hidden', 'no release during the hold')
+  // Refill within the deadline: full mapping resumes.
+  for (const item of items) {
+    const button = f.document.createElement('button')
+    button.setAttribute('aria-label', labels.jump(item.turn, false))
+    nav.append(button)
+  }
+  assert.equal(f.owner.reconcile(items), true)
+  assert.equal(f.owner.lastSkip, null); assert.equal(f.owner.lastReject, null)
+  assert.equal(nav.style.visibility, 'hidden')
+  // Collapse again and ride the wall-clock deadline to fail open.
+  for (const button of [...nav.querySelectorAll('button')]) button.remove()
+  const started = performance.now()
+  const realNow = performance.now.bind(performance)
+  let virtualNow = started
+  const now = performance.now
+  performance.now = () => virtualNow
+  try {
+    assert.equal(f.owner.reconcile(items), true, 'second collapse still holds at first')
+    virtualNow = realNow() + 1600
+    assert.equal(f.owner.reconcile(items), false, 'past the deadline the takeover fails open')
+    assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
+    assert.match(f.owner.lastReject, /button-match:none:skipped3/)
+  } finally { performance.now = now }
+})
 console.log(`${passed} native navigation boundary tests passed`)

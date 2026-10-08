@@ -101,12 +101,28 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
    *  of our partial map (Piano-issued or native-issued jumps alike). The
    *  cancellation gate must not depend on map visibility. */
   const hasNativeBusy = (): boolean => nav !== null && nav.querySelector('button[aria-busy="true"]') !== null
+  let emptySince: number | null = null
+  let emptyRecheckScheduled = false
   const api = {
     rowFor, setMappedAnchors, anchorAtOrBefore, release, busy,
     /** Why the most recent reconcile refused takeover; null when it accepted. */
     lastReject: null as string | null,
     /** How many turns the most recent reconcile left unmapped (virtualized-out buttons); null when none. */
     lastSkip: null as string | null,
+    /** While holding an empty virtualizer window, drive the recheck ourselves:
+     *  child-list mutations stop firing once every button is gone, so nobody
+     *  else would re-run reconcile to notice the refill or the deadline. */
+    scheduleEmptyRecheck(): void {
+      if (emptyRecheckScheduled) return
+      emptyRecheckScheduled = true
+      const raf = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (callback: FrameRequestCallback) => { setTimeout(() => callback(performance.now()), 16); return 0 }
+      raf(() => {
+        emptyRecheckScheduled = false
+        if (saved !== undefined) api.reconcile(turns)
+      })
+    },
     /** One row scan per publication, never one scan per mark. */
     reconcile(next: readonly NavigationTurn[]): boolean {
       refreshRows()
@@ -173,29 +189,37 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         }
         api.lastSkip = skipped === 0 ? null : `skipped:${skipped}`
         if (nextButtons.size === 0) {
-          if (skipped === turns.length && turns.length > 0 && emptyWindow < 90) {
-            // Every turn label is absent at once: the official virtualized
-            // window collapsed to empty (all buttons unrendered). Releasing
-            // here would flash the native shell and re-feed the takeover
-            // oscillation; hold the takeover instead — keys without mapped
-            // buttons degrade via hasButton()/row scrolling — and let the
-            // window refill within a few frames. ~1.5s of held-empty frames
-            // (90 at 60fps) still fails open for a genuinely dead surface.
-            // The previous map is kept: stale entries fail their isConnected
-            // checks naturally once React swaps the nodes out.
+          // A demonstrably empty window: not one button rendered at all
+          // (all.length === 0) and every turn skipped — the virtualizer
+          // collapsed. Releasing here would flash the native shell and
+          // re-feed the takeover oscillation; hold the takeover on a wall-clock
+          // budget (~1.5s) instead. Keys without mapped buttons degrade via
+          // hasButton()/row scrolling; stale map entries fail their
+          // isConnected checks once React swaps the nodes out. A nonempty
+          // surface with no mappable button (drifted labels, unknown controls)
+          // never enters this branch — it fails open below.
+          const empty = all.length === 0 && skipped === turns.length && turns.length > 0
+          const now = performance.now()
+          if (empty && (emptySince === null ? (emptySince = now, true) : now - emptySince < 1500)) {
             emptyWindow++
             api.lastSkip = `empty-window:${emptyWindow}`
             api.lastReject = null
+            api.scheduleEmptyRecheck()
             if (candidate === nav) return true
             release(); nav = null; buttons.clear(); return false
           }
           api.lastReject = `button-match:none:skipped${skipped}`
+          emptySince = null
           release(); nav = null; buttons.clear(); return false
         }
         emptyWindow = 0
-        // 0.1.5 asserted all.length === turns.length; 0.1.7's navigator may
-        // render auxiliary buttons. Every mapped turn already has exactly one
-        // enabled match above, so surplus buttons cannot corrupt the mapping.
+        emptySince = null
+        // 0.1.5 asserted all.length === turns.length. Verified against
+        // upstream 0.1.7-rc.2 (TurnNavigator.tsx): its nav renders exactly one
+        // TurnMark button per virtualized turn and a non-button preview div —
+        // no auxiliary buttons. 0.1.5-era surfaces may carry auxiliary
+        // controls; every mapped turn already has exactly one enabled match
+        // above, so surplus buttons cannot corrupt the mapping.
       } else if (surfaces.length !== 0 || turns.length > 1 || turns.some(turn => turn.anchor.kind === 'unloaded')) {
         if (api.lastReject === null) api.lastReject = `absent-nav:turns${turns.length}`
         release(); nav = null; buttons.clear(); return false
