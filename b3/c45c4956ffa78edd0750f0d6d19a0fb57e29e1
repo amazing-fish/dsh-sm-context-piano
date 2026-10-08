@@ -1,0 +1,14 @@
+lib/client.js
+  h_8428784c741401 1524-1527,1561-1590,1610,1653
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "b3c45c4956ffa78edd0750f0d6d19a0fb57e29e1",
+  "prompts": {},
+  "humans": {
+    "h_8428784c741401": {
+      "author": "Ziao Huang <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
