@@ -39,6 +39,7 @@ const CSS = `
   opacity: 1;
 }
 .smcp-strip-hidden { display: none; }
+.smcp-bar[disabled] { opacity: .3; }
 .smcp-tooltip {
   position: absolute;
   z-index: 30;

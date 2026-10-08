@@ -185,7 +185,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   let tooltipKey: string | null = null
   const buttons = new Map<string, HTMLButtonElement>()
   const perf = { renders: 0, readerSkips: 0, nodeRebuilds: 0, keyedSemanticUpdates: 0, itemRebuilds: 0, turnRebuilds: 0, domReconciles: 0, mappedAnchorRebuilds: 0, hitTests: 0, barWrites: 0 }
-  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', nativeReject: null as string | null, gateMisses: 0, layout: { left: 0, flowLeft: 0, width: 0, top: 0 }, perf }
+  const debug = { mounted: true, bars: 0, total: 0, windowStart: 0, sessionId: undefined as string | undefined, hiddenReason: null as string | null, mode: 'native-fallback', nativeReject: null as string | null, nativeSkip: null as string | null, gateMisses: 0, layout: { left: 0, flowLeft: 0, width: 0, top: 0 }, perf }
   const writeData = (button: HTMLButtonElement, name: string, value: string): void => {
     if (button.dataset[name] === value) return
     button.dataset[name] = value
@@ -231,6 +231,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     debug.mode = 'native-fallback'
     debug.hiddenReason = reason
     debug.nativeReject = owner.lastReject
+    debug.nativeSkip = owner.lastSkip
   }
   const schedule = (flags = DIRTY_VIEW): void => {
     dirty |= flags
@@ -534,6 +535,16 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       writeData(button, 'role', item.role)
       writeData(button, 'kind', item.kind ?? 'turn')
       writeData(button, 'unloaded', String(item.anchorKey === null))
+      // A turn that needs the official load action but whose button is
+      // currently virtualized out of the native window cannot be activated;
+      // native disabled suppresses the delegated click. Reconcile re-enables
+      // the key on a later frame once the window covers the button again.
+      const navBlocked = item.anchorKey === null && !owner.hasButton(item.turn)
+      if (navBlocked !== button.hasAttribute('disabled')) {
+        if (navBlocked) button.setAttribute('disabled', '')
+        else button.removeAttribute('disabled')
+        perf.barWrites++
+      }
       writeAttr(button, 'aria-label', `${copy('turn', item.turn)} · ${semanticLabel(item, config.language)}: ${item.title}`)
       writeAttr(button, 'aria-current', String(item.key === active))
       writeAttr(button, 'aria-busy', String(item.turn === busyTurn))
@@ -568,7 +579,7 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
     status.textContent = localFailure ? landingFailure(config.language)
       : busyTurn !== null ? copy('loading', busyTurn) : failedTurn !== null ? copy('failed', failedTurn) : ''
     strip.hidden = false; owner.claim()
-    debug.mode = 'piano'; debug.hiddenReason = null; debug.nativeReject = null; debug.bars = visibleItems.length; debug.windowStart = windowStart
+    debug.mode = 'piano'; debug.hiddenReason = null; debug.nativeReject = null; debug.nativeSkip = owner.lastSkip; debug.bars = visibleItems.length; debug.windowStart = windowStart
   }
   const bind = (): void => {
     const id = selection.getSnapshot()
@@ -628,6 +639,13 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   }
   const activate = (item: PianoItem | undefined): void => {
     if (item === undefined || !nativeReady || strip.hidden) return
+    // An unloaded turn whose official load button is virtualized out has no
+    // runnable action this frame (no button to click, no row to scroll to).
+    // Keep the key inert — the delegated click is already suppressed by the
+    // native disabled attribute; guard the keyboard path here so Enter/Space
+    // does not surface a landing error. Reconcile re-enables activation once
+    // the virtualization window covers the button again.
+    if (item.anchorKey === null && !owner.hasButton(item.turn)) return
     const ticket = ++activation
     failedTurn = null; localFailure = false
     requestedTurn = item.anchorKey === null ? item.turn : null
