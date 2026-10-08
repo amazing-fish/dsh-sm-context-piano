@@ -177,6 +177,11 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       for (const [turn, button] of buttons) if (button.getAttribute('aria-current') === 'true') return turn
       return null
     },
+    /** Whether the official surface currently renders a live button for this turn
+     *  (false while virtualization keeps it outside the rendered window). */
+    hasButton(turn: number): boolean {
+      return buttons.get(turn)?.isConnected === true
+    },
     navigate(turn: number, anchorKey: string | null): boolean {
       if (scrollport === null || !flow.isConnected) return false
       refreshRows()
@@ -186,7 +191,13 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         if (saved === undefined) return false
         issuedUnloaded = anchorKey === null
         button.click()
-      } else if (turns.length !== 1 || row === null) return false
+      } else if (row === null) {
+        // No official button (virtualized out) and no rendered row — the
+        // unloaded-turn load action cannot run locally. Every turn with a
+        // rendered row stays navigable through direct scrolling, including
+        // multi-turn sessions whose edge button is momentarily absent.
+        return false
+      }
       if (row !== null) {
         scrollport.scrollTop += row.getBoundingClientRect().top - scrollport.getBoundingClientRect().top - 24
         flushReaderPosition()

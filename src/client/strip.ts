@@ -535,6 +535,16 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
       writeData(button, 'role', item.role)
       writeData(button, 'kind', item.kind ?? 'turn')
       writeData(button, 'unloaded', String(item.anchorKey === null))
+      // A turn that needs the official load action but whose button is
+      // currently virtualized out of the native window cannot be activated;
+      // native disabled suppresses the delegated click. Reconcile re-enables
+      // the key on a later frame once the window covers the button again.
+      const navBlocked = item.anchorKey === null && !owner.hasButton(item.turn)
+      if (navBlocked !== button.hasAttribute('disabled')) {
+        if (navBlocked) button.setAttribute('disabled', '')
+        else button.removeAttribute('disabled')
+        perf.barWrites++
+      }
       writeAttr(button, 'aria-label', `${copy('turn', item.turn)} · ${semanticLabel(item, config.language)}: ${item.title}`)
       writeAttr(button, 'aria-current', String(item.key === active))
       writeAttr(button, 'aria-busy', String(item.turn === busyTurn))
