@@ -1,0 +1,20 @@
+lib/client.js
+  h_8428784c741401 653,1600-1604,1614,2437-2442
+src/client/native-navigation.ts
+  h_8428784c741401 180-184,194-200
+src/client/strip.ts
+  h_8428784c741401 538-547
+src/client/styles.ts
+  h_8428784c741401 42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "fd6bc4ca2b56d03d94a64da1e1d214dff4bac8f7",
+  "prompts": {},
+  "humans": {
+    "h_8428784c741401": {
+      "author": "Ziao Huang <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
