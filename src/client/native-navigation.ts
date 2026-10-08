@@ -96,6 +96,10 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     for (const [turn, button] of buttons) if (button.getAttribute('aria-busy') === 'true') return turn
     return null
   }
+  /** Whether ANY official button is mid-load, including ones virtualized out
+   *  of our partial map (Piano-issued or native-issued jumps alike). The
+   *  cancellation gate must not depend on map visibility. */
+  const hasNativeBusy = (): boolean => nav !== null && nav.querySelector('button[aria-busy="true"]') !== null
   const api = {
     rowFor, setMappedAnchors, anchorAtOrBefore, release, busy,
     /** Why the most recent reconcile refused takeover; null when it accepted. */
@@ -129,20 +133,37 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
           entries.push(button); byLabel.set(label, entries)
         }
         // 0.1.7's navigator virtualizes its button list: edge turns (typically
-        // turn 1) enter and leave the rendered window every frame. A missing
-        // button for one turn is therefore a transient rendering-window fact,
-        // not a contract break — map what is rendered, skip the rest; the next
+        // turn 1) enter and leave the rendered window every frame. A turn
+        // whose label is genuinely absent from the surface is a transient
+        // rendering-window fact, not a contract break — skip it; the next
         // reconcile re-maps the full set once the window covers it. The kind
         // is our inference too: when the official side has already (not yet)
-        // loaded the turn, try the other label variant before skipping.
+        // loaded the turn, try the other label variant. But a button that IS
+        // rendered, yet disabled without a pending load or ambiguous by
+        // label, is an explicit official state and fails open — that is the
+        // disabled-state contract asserted by scripts/integration.mjs.
         let skipped = 0
         for (const turn of turns) {
-          const pick = (list: HTMLButtonElement[]): HTMLButtonElement | null => list.length === 1 && !list[0].disabled ? list[0] : null
           const primary = byLabel.get(labels.jump(turn.turn, turn.anchor.kind === 'unloaded')) ?? []
           const alternate = byLabel.get(labels.jump(turn.turn, turn.anchor.kind !== 'unloaded')) ?? []
-          const button = pick(primary) ?? pick(alternate)
-          if (button !== null) nextButtons.set(turn.turn, button)
-          else skipped++
+          let button: HTMLButtonElement | null = null
+          let absent = true
+          let rendered = 0
+          for (const list of [primary, alternate]) {
+            if (list.length === 0) continue
+            absent = false
+            rendered += list.length
+            if (list.length === 1 && !list[0].disabled) { button = list[0]; break }
+          }
+          if (button !== null) { nextButtons.set(turn.turn, button); continue }
+          if (absent) { skipped++; continue }
+          // Rendered but unmappable. A sole mid-load button (disabled while
+          // carrying aria-busy) is the transient load state of an unloaded
+          // jump — skip until it settles; anything else fails open.
+          const sole = rendered === 1 ? (primary[0] ?? alternate[0]) : null
+          if (sole !== null && sole.getAttribute('aria-busy') === 'true') { skipped++; continue }
+          api.lastReject = `button-match:turn${turn.turn}:${rendered}:${turn.anchor.kind}`
+          release(); nav = null; buttons.clear(); return false
         }
         api.lastSkip = skipped === 0 ? null : `skipped:${skipped}`
         if (nextButtons.size === 0) {
@@ -152,14 +173,6 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         // 0.1.5 asserted all.length === turns.length; 0.1.7's navigator may
         // render auxiliary buttons. Every mapped turn already has exactly one
         // enabled match above, so surplus buttons cannot corrupt the mapping.
-        // A pending unloaded-turn load may outlive a partial map: the busy
-        // button itself can be virtualized out while the official side is
-        // still loading, which would drop the turn from `buttons` and make
-        // busy() null. Keep the issuedUnloaded sentinel alive until the map
-        // is complete again so the cancellation gate in cancel()
-        // (!issuedUnloaded && busy() === null) stays open for Escape/wheel/
-        // pointer while the load is pending.
-        if (skipped === 0) issuedUnloaded = false
       } else if (surfaces.length !== 0 || turns.length > 1 || turns.some(turn => turn.anchor.kind === 'unloaded')) {
         if (api.lastReject === null) api.lastReject = `absent-nav:turns${turns.length}`
         release(); nav = null; buttons.clear(); return false
@@ -167,6 +180,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       if (candidate !== nav) release()
       nav = candidate
       buttons = nextButtons
+      issuedUnloaded = false
       api.lastReject = null
       return true
     },
@@ -215,7 +229,10 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     cancel(): void {
       // All input routes (wheel/touch/keyboard/pointer/dispose) share this
       // ownership gate. Native fallback must not be controlled by a hidden Piano.
-      if (saved === undefined || scrollport === null || (!issuedUnloaded && busy() === null)) return
+      // hasNativeBusy() scans the official surface directly, so a pending load
+      // stays cancellable even when its button is virtualized out of the map
+      // (Piano-issued or native-issued), and settles closed once it completes.
+      if (saved === undefined || scrollport === null || (!issuedUnloaded && !hasNativeBusy())) return
       refreshRows()
       const top = scrollport.scrollTop
       const line = scrollport.getBoundingClientRect().top + 24
