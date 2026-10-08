@@ -170,7 +170,7 @@ const press = async k => { piano().dispatchEvent(new window.KeyboardEvent('keydo
 
 await check('exactly one visible and accessible rail; native component stays mounted', () => {
   assert.equal(piano().hidden, false)
-  assert.equal(native.style.getPropertyValue('display'), 'none')
+  assert.equal(native.style.getPropertyValue('visibility'), 'hidden')
   assert.equal(native.getAttribute('aria-hidden'), 'true')
   assert.equal(native.querySelectorAll('button').length, 10)
 })
@@ -180,12 +180,12 @@ await check('native navigation replacement is detected and re-owned without doub
   slot.append(native)
   await frame()
   assert.equal(piano().hidden, false)
-  assert.equal(native.style.getPropertyValue('display'), 'none')
+  assert.equal(native.style.getPropertyValue('visibility'), 'hidden')
   const replacement = native.cloneNode(true)
   native.replaceWith(replacement)
   await frame()
   assert.equal(piano().hidden, false)
-  assert.equal(replacement.style.getPropertyValue('display'), 'none')
+  assert.equal(replacement.style.getPropertyValue('visibility'), 'hidden')
   assert.equal(replacement.getAttribute('aria-hidden'), 'true')
   // The observer must follow the nested replacement: a later button swap inside
   // the new surface (here with a drifted label) still has to be reconciled.
@@ -203,7 +203,7 @@ await check('native navigation replacement is detected and re-owned without doub
   slot.replaceWith(native)
   await frame()
   assert.equal(piano().hidden, false)
-  assert.equal(native.style.getPropertyValue('display'), 'none')
+  assert.equal(native.style.getPropertyValue('visibility'), 'hidden')
   assert.equal(native.getAttribute('aria-hidden'), 'true')
 })
 
@@ -228,12 +228,12 @@ await check('native disabled-state drift fails open and reclaims after recovery'
   nativeButton(3).disabled = true
   await frame()
   assert.equal(piano().hidden, true)
-  assert.equal(native.style.display, '')
+  assert.equal(native.style.visibility, '')
   assert.equal(native.hasAttribute('aria-hidden'), false)
   nativeButton(3).disabled = false
   await frame()
   assert.equal(piano().hidden, false)
-  assert.equal(native.style.getPropertyValue('display'), 'none')
+  assert.equal(native.style.getPropertyValue('visibility'), 'hidden')
 })
 
 await check('scroll hot path skips model rebuilds and DOM reconciliation', async () => {
@@ -446,7 +446,7 @@ await check('continuous keyed streaming stays turn-local and throttled', async (
 await check('contract drift restores official UI and hides Piano, never both', async () => {
   nativeButton(3).setAttribute('aria-label', 'changed-contract'); await frame()
   assert.equal(piano().hidden, true)
-  assert.equal(native.style.display, '')
+  assert.equal(native.style.visibility, '')
   assert.equal(native.hasAttribute('aria-hidden'), false)
   refresh(); await frame()
   assert.equal(piano().hidden, false)
@@ -455,14 +455,14 @@ await check('narrow-container fallback restores native ownership', async () => {
   Object.defineProperty(root, 'clientWidth', { value: 500, configurable: true })
   await triggerResize(root)
   assert.equal(piano().hidden, true)
-  assert.equal(native.style.display, '')
+  assert.equal(native.style.visibility, '')
   Object.defineProperty(root, 'clientWidth', { value: 1280, configurable: true })
   await triggerResize(root)
 })
 await check('disable restores native visibility and releases all subscriptions', async () => {
   await set('enabled', false)
   assert.equal(piano(), null)
-  assert.equal(native.style.display, '')
+  assert.equal(native.style.visibility, '')
   assert.equal(chat.listeners.size, 0)
   assert.equal(outline.listeners.size, 0)
   for (const source of sources.values()) assert.equal(source.listeners.size, 0)
@@ -476,7 +476,7 @@ await check('same-ID binding replacement rebinds exactly once', async () => {
 await check('session disappearance cannot publish stale content', async () => {
   probeStop(); chat.emit(); await frame()
   assert.equal(piano().hidden, true)
-  assert.equal(native.style.display, '')
+  assert.equal(native.style.visibility, '')
   assert.equal(chat.listeners.size, 0)
 })
 await check('dispose removes Piano and preserves native navigation', () => {
@@ -484,7 +484,7 @@ await check('dispose removes Piano and preserves native navigation', () => {
   assert.equal(piano(), null)
   assert.equal(document.querySelector('.smcp-tooltip'), null)
   assert.equal(native.isConnected, true)
-  assert.equal(native.style.display, '')
+  assert.equal(native.style.visibility, '')
 })
 console.log(`${passed} single-navigation integration checks passed`)
 dom.window.close()

@@ -13,12 +13,13 @@ export interface NativeLabels {
   navigation(): string
   jump(turn: number, unloaded: boolean): string
 }
-interface SavedSurface { nav: HTMLElement; display: string; priority: string; aria: string | null }
+interface SavedSurface { nav: HTMLElement; visibility: string; priority: string; aria: string | null }
 export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) {
   const local = flow.parentElement
   const scrollport = flow.closest<HTMLElement>('[data-conversation-scroll]') ?? local
   let nav: HTMLElement | null = null
   let saved: SavedSurface | undefined
+  let emptyWindow = 0
   let buttons = new Map<number, HTMLButtonElement>()
   let turns: readonly NavigationTurn[] = []
   let rows = new Map<string, HTMLElement>()
@@ -53,9 +54,9 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     if (saved === undefined) return
     const old = saved
     saved = undefined
-    if (old.nav.style.getPropertyValue('display') === 'none' && old.nav.style.getPropertyPriority('display') === 'important') {
-      if (old.display) old.nav.style.setProperty('display', old.display, old.priority)
-      else old.nav.style.removeProperty('display')
+    if (old.nav.style.getPropertyValue('visibility') === 'hidden' && old.nav.style.getPropertyPriority('visibility') === 'important') {
+      if (old.visibility) old.nav.style.setProperty('visibility', old.visibility, old.priority)
+      else old.nav.style.removeProperty('visibility')
     }
     if (old.nav.getAttribute('aria-hidden') === 'true') {
       if (old.aria === null) old.nav.removeAttribute('aria-hidden')
@@ -143,6 +144,11 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         // label, is an explicit official state and fails open — that is the
         // disabled-state contract asserted by scripts/integration.mjs.
         let skipped = 0
+        // When the surface renders at least one button per turn, an absent
+        // label is label drift on a rendered button (contract break — fail
+        // open). When it renders fewer, the virtualization window is simply
+        // not covering every turn: absence is a transient window fact.
+        const plentiful = all.length >= turns.length
         for (const turn of turns) {
           const primary = byLabel.get(labels.jump(turn.turn, turn.anchor.kind === 'unloaded')) ?? []
           const alternate = byLabel.get(labels.jump(turn.turn, turn.anchor.kind !== 'unloaded')) ?? []
@@ -156,7 +162,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
             if (list.length === 1 && !list[0].disabled) { button = list[0]; break }
           }
           if (button !== null) { nextButtons.set(turn.turn, button); continue }
-          if (absent) { skipped++; continue }
+          if (absent && !plentiful) { skipped++; continue }
           // Rendered but unmappable. A sole mid-load button (disabled while
           // carrying aria-busy) is the transient load state of an unloaded
           // jump — skip until it settles; anything else fails open.
@@ -167,9 +173,26 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         }
         api.lastSkip = skipped === 0 ? null : `skipped:${skipped}`
         if (nextButtons.size === 0) {
+          if (skipped === turns.length && turns.length > 0 && emptyWindow < 90) {
+            // Every turn label is absent at once: the official virtualized
+            // window collapsed to empty (all buttons unrendered). Releasing
+            // here would flash the native shell and re-feed the takeover
+            // oscillation; hold the takeover instead — keys without mapped
+            // buttons degrade via hasButton()/row scrolling — and let the
+            // window refill within a few frames. ~1.5s of held-empty frames
+            // (90 at 60fps) still fails open for a genuinely dead surface.
+            // The previous map is kept: stale entries fail their isConnected
+            // checks naturally once React swaps the nodes out.
+            emptyWindow++
+            api.lastSkip = `empty-window:${emptyWindow}`
+            api.lastReject = null
+            if (candidate === nav) return true
+            release(); nav = null; buttons.clear(); return false
+          }
           api.lastReject = `button-match:none:skipped${skipped}`
           release(); nav = null; buttons.clear(); return false
         }
+        emptyWindow = 0
         // 0.1.5 asserted all.length === turns.length; 0.1.7's navigator may
         // render auxiliary buttons. Every mapped turn already has exactly one
         // enabled match above, so surplus buttons cannot corrupt the mapping.
@@ -186,9 +209,14 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
     },
     claim(): void {
       if (nav === null || saved?.nav === nav) return
-      saved = { nav, display: nav.style.getPropertyValue('display'), priority: nav.style.getPropertyPriority('display'), aria: nav.getAttribute('aria-hidden') }
+      saved = { nav, visibility: nav.style.getPropertyValue('visibility'), priority: nav.style.getPropertyPriority('visibility'), aria: nav.getAttribute('aria-hidden') }
       // Keep the original React owner callable while exposing only Piano.
-      nav.style.setProperty('display', 'none', 'important')
+      // Hide with visibility, NOT display: none — display:none removes the
+      // layout box, and 0.1.7's virtualized navigator collapses its rendered
+      // button window to empty when its buttons stop intersecting. The hidden
+      // surface kept that window alive through every takeover frame, which
+      // alternated takeover and surrender at rAF rate (skipped:N == all).
+      nav.style.setProperty('visibility', 'hidden', 'important')
       nav.setAttribute('aria-hidden', 'true')
       // Scrollbar dragging and selecting transcript text are reader intent
       // too; these need not emit wheel, touchstart or a navigation key.

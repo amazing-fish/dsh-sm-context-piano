@@ -45,19 +45,21 @@ test('an unlabeled or role-based native landmark also prevents duplicate UI', f 
   const nav = f.document.createElement('div'); nav.setAttribute('role', 'navigation'); f.flow.before(nav)
   assert.equal(f.owner.reconcile([turn(1)]), false)
 })
-test('takeover restores original inline style and accessibility values exactly', f => {
+test('takeover hides with visibility (keeps the virtualizer box) and restores exactly', f => {
   const nav = f.addNav([turn(1), turn(2)])
-  nav.style.setProperty('display', 'grid', 'important'); nav.setAttribute('aria-hidden', 'false')
+  nav.style.setProperty('visibility', 'visible', 'important'); nav.setAttribute('aria-hidden', 'false')
   assert.equal(f.owner.reconcile([turn(1), turn(2)]), true); f.owner.claim()
-  assert.equal(nav.style.display, 'none'); assert.equal(nav.getAttribute('aria-hidden'), 'true')
-  f.owner.release(); assert.equal(nav.style.display, 'grid'); assert.equal(nav.style.getPropertyPriority('display'), 'important')
+  // display:none would collapse the official virtualizer's ResizeObserver
+  // border box to 0x0 and unmount every turn button; visibility keeps it.
+  assert.equal(nav.style.visibility, 'hidden'); assert.equal(nav.getAttribute('aria-hidden'), 'true')
+  f.owner.release(); assert.equal(nav.style.visibility, 'visible'); assert.equal(nav.style.getPropertyPriority('visibility'), 'important')
   assert.equal(nav.getAttribute('aria-hidden'), 'false')
 })
 test('contract drift after takeover restores the native element', f => {
   const nav = f.addNav([turn(1), turn(2)])
   f.owner.reconcile([turn(1), turn(2)]); f.owner.claim(); nav.setAttribute('aria-label', 'changed')
   assert.equal(f.owner.reconcile([turn(1), turn(2)]), false)
-  assert.equal(nav.style.display, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
+  assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
 })
 test('Escape-equivalent cancellation before aria-busy commits still supersedes the jump', f => {
   const items = [turn(1, false), turn(2)]
