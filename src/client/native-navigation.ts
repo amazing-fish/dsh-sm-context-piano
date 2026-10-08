@@ -171,6 +171,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         // label, is an explicit official state and fails open — that is the
         // disabled-state contract asserted by scripts/integration.mjs.
         let skipped = 0
+        const claimed = new Set<HTMLButtonElement>()
         // When the surface renders at least one button per turn, an absent
         // label is label drift on a rendered button (contract break — fail
         // open). When it renders fewer, the virtualization window is simply
@@ -179,6 +180,7 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         for (const turn of turns) {
           const primary = byLabel.get(labels.jump(turn.turn, turn.anchor.kind === 'unloaded')) ?? []
           const alternate = byLabel.get(labels.jump(turn.turn, turn.anchor.kind !== 'unloaded')) ?? []
+          for (const list of [primary, alternate]) for (const button of list) claimed.add(button)
           let button: HTMLButtonElement | null = null
           let absent = true
           let rendered = 0
@@ -196,6 +198,19 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
           const sole = rendered === 1 ? (primary[0] ?? alternate[0]) : null
           if (sole !== null && sole.getAttribute('aria-busy') === 'true') { skipped++; continue }
           api.lastReject = `button-match:turn${turn.turn}:${rendered}:${turn.anchor.kind}`
+          release(); nav = null; buttons.clear(); return false
+        }
+        // Every rendered button must be consumed by a recognized turn
+        // mapping. A mixed partial window (one valid button + one drifted
+        // label) would otherwise take over while hiding the drifted control:
+        // an unloaded turn's load entry point would vanish behind a disabled
+        // Piano key. Unrecognized buttons always fail open. (Neither 0.1.5
+        // nor 0.1.7 renders auxiliary buttons inside the nav — the old
+        // all.length === turns.length contract held on 0.1.5 precisely
+        // because turn marks were the only buttons there.)
+        for (const button of all) {
+          if (claimed.has(button)) continue
+          api.lastReject = `button-match:unrecognized:${all.length}`
           release(); nav = null; buttons.clear(); return false
         }
         api.lastSkip = skipped === 0 ? null : `skipped:${skipped}`

@@ -141,7 +141,15 @@ test('a partially rendered window whose every button drifted fails open, never h
   const nav = f.addNav([turn(9), turn(9)], 'Turns')
   assert.equal(f.owner.reconcile(items), false)
   assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
-  assert.match(f.owner.lastReject, /button-match:none:skipped5/)
+  assert.match(f.owner.lastReject, /button-match:unrecognized:2/)
+})
+test('a mixed partial window (one valid button plus one drifted label) fails open', f => {
+  // 3 turns; the window renders turn 2's valid button and one drifted button.
+  const items = [turn(1, false), turn(2), turn(3)]
+  const nav = f.addNav([turn(2), turn(9)], 'Turns')
+  assert.equal(f.owner.reconcile(items), false)
+  assert.equal(nav.style.visibility, ''); assert.equal(nav.hasAttribute('aria-hidden'), false)
+  assert.match(f.owner.lastReject, /button-match:unrecognized:2/)
 })
 test('a fully collapsed window holds the takeover, refills, and degrades to fail open past the deadline', f => {
   const items = [turn(1), turn(2), turn(3)]
