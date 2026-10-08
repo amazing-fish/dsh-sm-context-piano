@@ -152,6 +152,14 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
         // 0.1.5 asserted all.length === turns.length; 0.1.7's navigator may
         // render auxiliary buttons. Every mapped turn already has exactly one
         // enabled match above, so surplus buttons cannot corrupt the mapping.
+        // A pending unloaded-turn load may outlive a partial map: the busy
+        // button itself can be virtualized out while the official side is
+        // still loading, which would drop the turn from `buttons` and make
+        // busy() null. Keep the issuedUnloaded sentinel alive until the map
+        // is complete again so the cancellation gate in cancel()
+        // (!issuedUnloaded && busy() === null) stays open for Escape/wheel/
+        // pointer while the load is pending.
+        if (skipped === 0) issuedUnloaded = false
       } else if (surfaces.length !== 0 || turns.length > 1 || turns.some(turn => turn.anchor.kind === 'unloaded')) {
         if (api.lastReject === null) api.lastReject = `absent-nav:turns${turns.length}`
         release(); nav = null; buttons.clear(); return false
@@ -159,7 +167,6 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       if (candidate !== nav) release()
       nav = candidate
       buttons = nextButtons
-      issuedUnloaded = false
       api.lastReject = null
       return true
     },
