@@ -253,6 +253,16 @@ export function createNativeNavigation(flow: HTMLElement, labels: NativeLabels) 
       // alternated takeover and surrender at rAF rate (skipped:N == all).
       nav.style.setProperty('visibility', 'hidden', 'important')
       nav.setAttribute('aria-hidden', 'true')
+      // A temporary geometry fallback released us mid-hold, which stops the
+      // self-driven recheck (its gate is saved !== undefined). Reclaiming
+      // must not blindly trust the strip's cached readiness: if the surface
+      // is still empty, resume the deadline supervision here — otherwise an
+      // empty navigator could be owned indefinitely with nobody left to
+      // notice the lapse.
+      if (nav.querySelector('button') === null && turns.length > 0) {
+        if (emptySince === null) emptySince = performance.now()
+        api.scheduleEmptyRecheck()
+      }
       // Scrollbar dragging and selecting transcript text are reader intent
       // too; these need not emit wheel, touchstart or a navigation key.
       scrollport?.addEventListener('pointerdown', readerPointer, { passive: true })

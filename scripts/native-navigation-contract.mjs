@@ -3,16 +3,16 @@ import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
 import { createNativeNavigation } from '../src/client/native-navigation.ts'
 let passed = 0
-const pending = []
+// Async tests mock globalThis timers (performance.now, rAF); run every test
+// serially so concurrent mocks cannot leak into each other's rAF chains.
+let chain = Promise.resolve()
 function test(name, run) {
   const f = fixture()
-  let result
-  try { result = run(f) }
-  catch (error) { f.stop(); throw error }
-  if (result != null && typeof result.then === 'function') {
-    pending.push(result.then(() => { passed++; console.log(`ok ${passed} - ${name}`); f.stop() },
-      error => { console.error(error); console.log(`not ok - ${name}`); process.exitCode = 1; f.stop() }))
-  } else { passed++; console.log(`ok ${passed} - ${name}`); f.stop() }
+  chain = Promise.resolve(chain).then(() => {
+    const result = run(f)
+    if (result != null && typeof result.then === 'function') return result
+  }).then(() => { passed++; console.log(`ok ${passed} - ${name}`); f.stop() },
+    error => { console.error(error); console.log(`not ok - ${name}`); process.exitCode = 1; f.stop() })
 }
 const labels = { navigation: () => 'Turns', jump: (turn, unloaded) => `${unloaded ? 'Load' : 'Jump'} ${turn}` }
 const turn = (n, loaded = true) => ({ turn: n, prompt: '', response: '', anchor: loaded ? { kind: 'loaded', key: `u${n}` } : { kind: 'unloaded', seq: n * 100 } })
@@ -207,5 +207,37 @@ test('the empty-window self-driven recheck notifies the strip on hold, recovery,
     assert.equal(nav.style.visibility, 'hidden')
   } finally { globalThis.requestAnimationFrame = globalRaf }
 })
-await Promise.all(pending)
+test('reclaiming an emptied surface after a fallback resumes the deadline supervision', async f => {
+  const globalRaf = globalThis.requestAnimationFrame
+  globalThis.requestAnimationFrame = cb => { setTimeout(() => cb(performance.now()), 0); return 0 }
+  try {
+    const items = [turn(1), turn(2)]
+    const nav = f.addNav(items)
+    f.owner.reconcile(items); f.owner.claim()
+    for (const button of [...nav.querySelectorAll('button')]) button.remove()
+    assert.equal(f.owner.reconcile(items), true, 'hold begins')
+    // Temporary geometry fallback: the strip releases us mid-hold.
+    f.owner.release()
+    assert.equal(nav.style.visibility, '')
+    // Layout-only recovery: the strip reclaims with cached readiness and no
+    // reconcile — claim() must resume supervision of the emptied surface.
+    f.owner.claim()
+    assert.equal(nav.style.visibility, 'hidden', 'reclaimed')
+    // Let the self-driven chain run past the deadline: it must fail open.
+    const started = performance.now()
+    const now = performance.now
+    performance.now = () => started + 1600
+    try {
+      let settled = false
+      for (let i = 0; i < 8 && !settled; i++) {
+        await new Promise(ok => setTimeout(ok, 5))
+        if (f.owner.lastReject !== null || nav.style.visibility === '') settled = true
+      }
+      assert.equal(nav.style.visibility, '', 'deadline lapse surrenders the reclaimed empty surface')
+      assert.equal(nav.hasAttribute('aria-hidden'), false)
+      assert.match(f.owner.lastReject ?? '', /button-match:none:skipped2/)
+    } finally { performance.now = now }
+  } finally { globalThis.requestAnimationFrame = globalRaf }
+})
+await chain
 console.log(`${passed} native navigation boundary tests passed`)
