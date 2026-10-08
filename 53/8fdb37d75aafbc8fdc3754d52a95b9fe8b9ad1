@@ -1,0 +1,18 @@
+lib/client.js
+  h_8428784c741401 1529-1530,1541-1554,1612-1614,1618,1626,1633
+scripts/native-navigation-contract.mjs
+  h_8428784c741401 128-170
+src/client/native-navigation.ts
+  h_8428784c741401 104-105,112-125,192-203,207,212,216-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "538fdb37d75aafbc8fdc3754d52a95b9fe8b9ad1",
+  "prompts": {},
+  "humans": {
+    "h_8428784c741401": {
+      "author": "Ziao Huang <zahuang@stu.xidian.edu.cn>"
+    }
+  }
+}
