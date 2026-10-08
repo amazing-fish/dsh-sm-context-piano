@@ -639,6 +639,13 @@ function mount(ctx: ClientContext, flow: HTMLElement, t: Translate<SmContextPian
   }
   const activate = (item: PianoItem | undefined): void => {
     if (item === undefined || !nativeReady || strip.hidden) return
+    // An unloaded turn whose official load button is virtualized out has no
+    // runnable action this frame (no button to click, no row to scroll to).
+    // Keep the key inert — the delegated click is already suppressed by the
+    // native disabled attribute; guard the keyboard path here so Enter/Space
+    // does not surface a landing error. Reconcile re-enables activation once
+    // the virtualization window covers the button again.
+    if (item.anchorKey === null && !owner.hasButton(item.turn)) return
     const ticket = ++activation
     failedTurn = null; localFailure = false
     requestedTurn = item.anchorKey === null ? item.turn : null
